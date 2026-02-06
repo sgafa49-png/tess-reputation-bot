@@ -363,7 +363,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     if update.message.chat.type in ['group', 'supergroup']:
         keyboard = [
             [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")],
-            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/tag_eclipse")]
+            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
         ]
     else:
         if target_user_id != user_id:
