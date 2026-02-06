@@ -103,7 +103,7 @@ def init_db():
                     buyer_done BOOLEAN DEFAULT FALSE,
                     seller_done BOOLEAN DEFAULT FALSE,
                     guarantor_paid BOOLEAN DEFAULT FALSE,
-                    guarantor_username VARCHAR(100) DEFAULT %s,
+                    guarantor_username VARCHAR(100) DEFAULT 'prade146',
                     payment_transaction_id VARCHAR(100),
                     payment_proof TEXT,
                     chat_message_id BIGINT,
@@ -111,7 +111,7 @@ def init_db():
                     expires_at TIMESTAMP,
                     completed_at TIMESTAMP
                 )
-            ''', (GUARANTOR_USERNAME,))
+            ''')
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS deal_messages (
@@ -193,7 +193,7 @@ def init_db():
                 buyer_done INTEGER DEFAULT 0,
                 seller_done INTEGER DEFAULT 0,
                 guarantor_paid INTEGER DEFAULT 0,
-                guarantor_username TEXT DEFAULT ?,
+                guarantor_username TEXT DEFAULT 'prade146',
                 payment_transaction_id TEXT,
                 payment_proof TEXT,
                 chat_message_id INTEGER,
@@ -201,7 +201,7 @@ def init_db():
                 expires_at TEXT,
                 completed_at TEXT
             )
-        ''', (GUARANTOR_USERNAME,))
+        ''')
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS deal_messages (
