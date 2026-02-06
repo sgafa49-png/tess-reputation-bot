@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-wheel-metadata/
+
+# БД
+*.db
+*.db-journal
+reputation.db
+reputation.db-journal
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Логи
+*.log
+bot.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Replit
+.replit
+.replit.*
