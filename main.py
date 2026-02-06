@@ -16,7 +16,6 @@ from telegram.ext import (
 # ========== НАСТРОЙКИ СРЕДЫ ==========
 def is_railway():
     """Проверяем что мы на Railway"""
-    # Простая проверка по DATABASE_URL
     db_url = os.environ.get('DATABASE_URL', '')
     return 'railway.app' in db_url and db_url.startswith('postgresql://')
 
@@ -28,12 +27,12 @@ def is_replit():
 if is_replit():
     os.environ.pop('DATABASE_URL', None)
     os.environ.pop('RAILWAY_ENVIRONMENT', None)
-    print("🧹 Очищены Railway переменные (Replit режим)")
+    print("Очищены Railway переменные (Replit режим)")
 
 # Получаем токен
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    print("❌ ОШИБКА: TELEGRAM_TOKEN не найден!")
+    print("ОШИБКА: TELEGRAM_TOKEN не найден!")
     sys.exit(1)
 
 # ========== БАЗА ДАННЫХ (УНИВЕРСАЛЬНАЯ) ==========
@@ -45,14 +44,14 @@ def get_db_connection():
             DATABASE_URL = os.environ.get('DATABASE_URL')
             if DATABASE_URL:
                 conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-                print("✅ Подключено к PostgreSQL (Railway)")
+                print("Подключено к PostgreSQL (Railway)")
                 return conn
         except Exception as e:
-            print(f"⚠️ Ошибка PostgreSQL: {e}")
+            print(f"Ошибка PostgreSQL: {e}")
     
     # На Replit или при ошибке - используем SQLite
     conn = sqlite3.connect('reputation.db')
-    print("✅ Подключено к SQLite (Replit/Локально)")
+    print("Подключено к SQLite (Replit/Локально)")
     return conn
 
 def init_db():
@@ -82,7 +81,7 @@ def init_db():
                 )
             ''')
         except Exception as e:
-            print(f"⚠️ Ошибка создания таблиц PostgreSQL: {e}")
+            print(f"Ошибка создания таблиц PostgreSQL: {e}")
     else:
         # SQLite для Replit
         cursor.execute('''
@@ -106,7 +105,7 @@ def init_db():
     
     conn.commit()
     conn.close()
-    print("✅ База данных инициализирована")
+    print("База данных инициализирована")
 
 # ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
 def save_user(user_id, username):
@@ -116,7 +115,6 @@ def save_user(user_id, username):
     
     try:
         if is_railway():
-            # PostgreSQL синтаксис
             cursor.execute('''
                 INSERT INTO users (user_id, username, registered_at) 
                 VALUES (%s, %s, %s)
@@ -124,7 +122,6 @@ def save_user(user_id, username):
                 SET username = EXCLUDED.username
             ''', (user_id, username, datetime.now().isoformat()))
         else:
-            # SQLite синтаксис
             cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
             if not cursor.fetchone():
                 cursor.execute('INSERT INTO users VALUES (?, ?, ?)',
@@ -135,7 +132,7 @@ def save_user(user_id, username):
         
         conn.commit()
     except Exception as e:
-        print(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+        print(f"Ошибка сохранения пользователя {user_id}: {e}")
     finally:
         conn.close()
 
@@ -161,7 +158,7 @@ def save_reputation(from_user, from_username, to_user, to_username, text, photo_
         
         conn.commit()
     except Exception as e:
-        print(f"❌ Ошибка сохранения репутации: {e}")
+        print(f"Ошибка сохранения репутации: {e}")
     finally:
         conn.close()
 
@@ -202,7 +199,7 @@ def get_user_reputation(user_id):
                 'from_username': row[6] or f"id{row[1]}"
             })
     except Exception as e:
-        print(f"❌ Ошибка получения репутации: {e}")
+        print(f"Ошибка получения репутации: {e}")
     finally:
         conn.close()
     
@@ -228,7 +225,7 @@ def get_user_info(user_id):
                 'registered_at': row[2]
             }
     except Exception as e:
-        print(f"❌ Ошибка получения пользователя {user_id}: {e}")
+        print(f"Ошибка получения пользователя {user_id}: {e}")
     finally:
         conn.close()
     
@@ -256,7 +253,7 @@ def get_user_by_username(username):
                 'registered_at': row[2]
             }
     except Exception as e:
-        print(f"❌ Ошибка поиска пользователя {username}: {e}")
+        print(f"Ошибка поиска пользователя {username}: {e}")
     finally:
         conn.close()
     
@@ -289,6 +286,22 @@ def get_reputation_stats(user_id):
         'all_reps': all_reps
     }
 
+def get_last_positive(user_id):
+    """Получить последний положительный отзыв"""
+    all_reps = get_user_reputation(user_id)
+    for rep in all_reps:
+        if rep["text"].lower().startswith(('+rep', '+реп')):
+            return rep
+    return None
+
+def get_last_negative(user_id):
+    """Получить последний отрицательный отзыв"""
+    all_reps = get_user_reputation(user_id)
+    for rep in all_reps:
+        if rep["text"].lower().startswith(('-rep', '-реп')):
+            return rep
+    return None
+
 # ========== TELEGRAM HANDLERS ==========
 async def quick_profile(update: Update, context: CallbackContext) -> None:
     """Быстрый просмотр профиля в чате"""
@@ -313,7 +326,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
                 target_user_id = user_info['user_id']
                 target_username = user_info['username'] or f"id{target_user_id}"
             else:
-                await update.message.reply_text("⚠️ Не найден")
+                await update.message.reply_text("Не найден")
                 return
     else:
         target_user_id = user_id
@@ -322,7 +335,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
     
-    display_username = f"@{target_username}" if target_username and not target_username.startswith('id') else target_username
+    display_username = f"👤@{target_username}" if target_username and not target_username.startswith('id') else f"👤{target_username}"
     
     if user_info and user_info.get("registered_at"):
         try:
@@ -333,29 +346,29 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     else:
         registration_date = datetime.now().strftime("%d/%m/%Y")
     
-    text = f"""👤 <b>{display_username} (ID: {target_user_id})</b>
+    text = f"""{display_username} (ID: {target_user_id})
 
-<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote>
+<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-<blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
+📆 Зарегистрирован: {registration_date}
 
-📆 <b>Зарегистрирован:</b> {registration_date}"""
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
     
     if update.message.chat.type in ['group', 'supergroup']:
         keyboard = [
-            [InlineKeyboardButton("📊 Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")]
+            [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")]
         ]
     else:
         if target_user_id != user_id:
             context.user_data['found_user_id'] = target_user_id
             keyboard = [
-                [InlineKeyboardButton("🏆 Посмотреть репутацию", callback_data='view_found_user_reputation')],
-                [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')]
+                [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+                [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')]
             ]
         else:
             keyboard = [
-                [InlineKeyboardButton("🏆 Моя репутация", callback_data='my_reputation')],
-                [InlineKeyboardButton("📋 Полный профиль", callback_data='profile')]
+                [InlineKeyboardButton("Моя репутация", callback_data='my_reputation')],
+                [InlineKeyboardButton("Полный профиль", callback_data='profile')]
             ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -376,17 +389,16 @@ async def start(update: Update, context: CallbackContext) -> None:
         except:
             pass
     
-    text = f"""<b>🛡 TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
+    text = f"""<b>TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
 
 Ваш ID: <code>[{user_id}]</code>
 
 Здесь можно смотреть и сохранять репутацию, а при сомнениях — провести сделку через гаранта <i>(в разработке)</i>"""
     
     keyboard = [
-        [InlineKeyboardButton("✍️Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("🗒️Скопировать ID", callback_data='copy_id')],
-        [InlineKeyboardButton("🔎Поиск User", callback_data='search_user')],
-        [InlineKeyboardButton("👤Профиль", callback_data='profile')]
+        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("Найти пользователя", callback_data='search_user')],
+        [InlineKeyboardButton("Профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -399,7 +411,7 @@ async def show_profile_deeplink(update: Update, target_user_id: int, context: Ca
     stats = get_reputation_stats(target_user_id)
     
     username = user_info.get("username", "") if user_info else ""
-    display_username = f"@{username}" if username else f"id{target_user_id}"
+    display_username = f"👤@{username}" if username else f"👤id{target_user_id}"
     
     if user_info and user_info.get("registered_at"):
         try:
@@ -410,20 +422,20 @@ async def show_profile_deeplink(update: Update, target_user_id: int, context: Ca
     else:
         registration_date = datetime.now().strftime("%d/%m/%Y")
     
-    text = f"""👤 <b>{display_username} (ID: {target_user_id})</b>
+    text = f"""{display_username} (ID: {target_user_id})
 
-<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote>
+<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-<blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
+📆 Зарегистрирован: {registration_date}
 
-📆 <b>Зарегистрирован:</b> {registration_date}"""
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
     
     context.user_data['found_user_id'] = target_user_id
     
     keyboard = [
-        [InlineKeyboardButton("🏆 Посмотреть репутацию", callback_data='view_found_user_reputation')],
-        [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("↩️ Главное меню", callback_data='back_to_main')]
+        [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("Главное меню", callback_data='back_to_main')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -443,42 +455,31 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await query.message.reply_text(
             f"Для отправки репутации пользователю @{target_username} перейдите в личные сообщения с ботом",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📩 Перейти в бот", url=f"https://t.me/{context.bot.username}")]
+                [InlineKeyboardButton("Перейти в бот", url=f"https://t.me/{context.bot.username}")]
             ])
         )
         return
     
     if query.data == 'send_reputation':
-        text = """<b>🏆 Отправьте репутацию.</b>
+        text = """<b>Отправьте репутацию.</b>
 
-🔎К репутации необходимо приложить хотя бы одну фотографию.
+К репутации необходимо приложить хотя бы одну фотографию.
 
-👤Пример «+rep @username все идеально»
-👤Пример «-rep user_id сделка не зашла»"""
+Пример «+rep @username все идеально»
+Пример «-rep user_id сделка не зашла»"""
         
-        keyboard = [[InlineKeyboardButton("↩️Назад", callback_data='back_to_main')]]
+        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
         context.user_data['waiting_for_rep'] = True
     
-    elif query.data == 'copy_id':
-        user_id = query.from_user.id
-        text = f"""📋 **Ваш ID для копирования:**
-
-`{user_id}`
-
-(Нажмите и удерживайте текст, чтобы скопировать)"""
-        
-        keyboard = [[InlineKeyboardButton("↩️Назад", callback_data='back_to_main')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-    
     elif query.data == 'search_user':
-        text = "🔎 **Поиск пользователя**\n\nВведите username или ID пользователя:"
+        text = "**Поиск пользователя**\n\nВведите username или ID пользователя:"
         
-        keyboard = [[InlineKeyboardButton("↩️Назад", callback_data='back_to_main')]]
+        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        # Устанавливаем флаг ожидания поиска
         context.user_data['waiting_for_search'] = True
     
     elif query.data == 'profile':
@@ -511,7 +512,7 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
     stats = get_reputation_stats(user_id)
     
     username = user_info.get("username", "") if user_info else ""
-    display_username = f"@{username}" if username else f"id{user_id}"
+    display_username = f"👤@{username}" if username else f"👤id{user_id}"
     
     if user_info and user_info.get("registered_at"):
         try:
@@ -522,50 +523,52 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
     else:
         registration_date = datetime.now().strftime("%d/%m/%Y")
     
-    text = f"""👤 <b>{display_username} (ID: {user_id})</b>
+    text = f"""{display_username} (ID: {user_id})
 
-<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote>
+<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-<blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
+📆 Зарегистрирован: {registration_date}
 
-📆 <b>Зарегистрирован:</b> {registration_date}"""
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
     
     if is_own_profile:
         keyboard = [
-            [InlineKeyboardButton("🏆Моя репутация", callback_data='my_reputation')],
-            [InlineKeyboardButton("↩️Назад", callback_data='back_to_main')]
+            [InlineKeyboardButton("Моя репутация", callback_data='my_reputation')],
+            [InlineKeyboardButton("Назад", callback_data='back_to_main')]
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("🏆Посмотреть репутацию", callback_data='view_found_user_reputation')],
-            [InlineKeyboardButton("✍️Отправить репутацию", callback_data='send_reputation')],
-            [InlineKeyboardButton("↩️Назад к поиску", callback_data='search_user')]
+            [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+            [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
+            [InlineKeyboardButton("Назад к поиску", callback_data='search_user')]
         ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_my_reputation_menu(query):
-    text = "🏆 <b>Выберите раздел:</b>"
+    text = "<b>Выберите раздел:</b>"
     
     keyboard = [
-        [InlineKeyboardButton("✅ ПОЛОЖИТЕЛЬНАЯ", callback_data='show_positive')],
-        [InlineKeyboardButton("❌ ОТРИЦАТЕЛЬНАЯ", callback_data='show_negative')],
-        [InlineKeyboardButton("📋 ВСЕ", callback_data='show_all')],
-        [InlineKeyboardButton("↩️Назад в профиль", callback_data='profile')]
+        [InlineKeyboardButton("Положительные", callback_data='show_positive')],
+        [InlineKeyboardButton("Отрицательные", callback_data='show_negative')],
+        [InlineKeyboardButton("Все", callback_data='show_all')],
+        [InlineKeyboardButton("Последний положительный", callback_data='show_last_positive')],
+        [InlineKeyboardButton("Последний отрицательный", callback_data='show_last_negative')],
+        [InlineKeyboardButton("Назад в профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_found_user_reputation_menu(query, target_user_id):
-    text = "🏆 <b>Выберите раздел:</b>"
+    text = "<b>Выберите раздел:</b>"
     
     keyboard = [
-        [InlineKeyboardButton("✅ ПОЛОЖИТЕЛЬНАЯ", callback_data='found_show_positive')],
-        [InlineKeyboardButton("❌ ОТРИЦАТЕЛЬНАЯ", callback_data='found_show_negative')],
-        [InlineKeyboardButton("📋 ВСЕ", callback_data='found_show_all')],
-        [InlineKeyboardButton("↩️Назад в профиль", callback_data='back_to_found_profile')]
+        [InlineKeyboardButton("Положительные", callback_data='found_show_positive')],
+        [InlineKeyboardButton("Отрицательные", callback_data='found_show_negative')],
+        [InlineKeyboardButton("Все", callback_data='found_show_all')],
+        [InlineKeyboardButton("Назад в профиль", callback_data='back_to_found_profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -629,7 +632,39 @@ async def handle_show_reputation(query):
         
         back_button = 'my_reputation'
     
-    keyboard = [[InlineKeyboardButton("↩️Назад", callback_data=back_button)]]
+    elif query.data == 'show_last_positive':
+        last_positive = get_last_positive(user_id)
+        
+        if not last_positive:
+            text = "✅ <b>Последний положительный отзыв</b>\n\nУ вас еще нет положительных отзывов."
+        else:
+            from_user = last_positive.get("from_username", f"id{last_positive['from_user']}")
+            date = datetime.fromisoformat(last_positive["created_at"]).strftime("%d/%m/%Y")
+            text = f"""✅ <b>Последний положительный отзыв</b>
+
+От: @{from_user}
+Текст: {last_positive['text']}
+Дата: {date}"""
+        
+        back_button = 'my_reputation'
+    
+    elif query.data == 'show_last_negative':
+        last_negative = get_last_negative(user_id)
+        
+        if not last_negative:
+            text = "❌ <b>Последний отрицательный отзыв</b>\n\nУ вас еще нет отрицательных отзывов."
+        else:
+            from_user = last_negative.get("from_username", f"id{last_negative['from_user']}")
+            date = datetime.fromisoformat(last_negative["created_at"]).strftime("%d/%m/%Y")
+            text = f"""❌ <b>Последний отрицательный отзыв</b>
+
+От: @{from_user}
+Текст: {last_negative['text']}
+Дата: {date}"""
+        
+        back_button = 'my_reputation'
+    
+    keyboard = [[InlineKeyboardButton("Назад", callback_data=back_button)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
@@ -697,23 +732,22 @@ async def handle_found_user_reputation(query, context):
         
         back_button = 'view_found_user_reputation'
     
-    keyboard = [[InlineKeyboardButton("↩️Назад", callback_data=back_button)]]
+    keyboard = [[InlineKeyboardButton("Назад", callback_data=back_button)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_main_menu(query):
     user_id = query.from_user.id
-    text = f"""<b>🛡 TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
+    text = f"""<b>TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
 
 Ваш ID: <code>[{user_id}]</code>
 
 Здесь можно смотреть и сохранять репутацию, а при сомнениях — провести сделку через гаранта <i>(в разработке)</i>"""
     
     keyboard = [
-        [InlineKeyboardButton("✍️Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("🗒️Скопировать ID", callback_data='copy_id')],
-        [InlineKeyboardButton("🔎Поиск User", callback_data='search_user')],
-        [InlineKeyboardButton("👤Профиль", callback_data='profile')]
+        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("Найти пользователя", callback_data='search_user')],
+        [InlineKeyboardButton("Профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -726,10 +760,11 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     save_user(user_id, username)
     
     if update.message.chat.type == 'private':
-        if context.user_data.get('waiting_for_rep'):
-            await handle_reputation_message_pm(update, context)
-        elif context.user_data.get('waiting_for_search'):
+        # Проверяем состояния в правильном порядке
+        if context.user_data.get('waiting_for_search'):
             await handle_search_message_pm(update, context)
+        elif context.user_data.get('waiting_for_rep'):
+            await handle_reputation_message_pm(update, context)
     
     elif update.message.chat.type in ['group', 'supergroup']:
         await handle_group_reputation(update, context)
@@ -751,7 +786,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             break
     
     if has_rep_pattern and not update.message.photo:
-        await update.message.reply_text("⚠️ Нужно фото")
+        await update.message.reply_text("Нужно фото")
         return
     
     if not update.message.photo:
@@ -766,7 +801,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             break
     
     if not target_identifier:
-        await update.message.reply_text("⚠️ Неверный формат")
+        await update.message.reply_text("Неверный формат")
         return
     
     target_info = {"id": None, "username": None}
@@ -788,11 +823,11 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             target_info["id"] = user_info['user_id']
             target_info["username"] = user_info['username']
         else:
-            await update.message.reply_text("⚠️ Пользователь не найден\nИспользуйте реплай или ID")
+            await update.message.reply_text("Пользователь не найден\nИспользуйте реплай или ID")
             return
     
     if target_info["id"] == user_id:
-        await update.message.reply_text("⚠️ Нельзя себе")
+        await update.message.reply_text("Нельзя себе")
         return
     
     save_reputation(
@@ -804,7 +839,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
         photo_id=update.message.photo[-1].file_id
     )
     
-    await update.message.reply_text("✅ Сохранено")
+    await update.message.reply_text("Сохранено")
 
 async def handle_reputation_message_pm(update: Update, context: CallbackContext) -> None:
     """Обработка репутации в личных сообщениях"""
@@ -812,7 +847,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
     text = update.message.text or update.message.caption or ""
     
     if not update.message.photo:
-        await update.message.reply_text("⚠️ Нужно фото")
+        await update.message.reply_text("Нужно фото")
         return
     
     patterns = [r'[-+](?:rep|реп)\s+(@?\w+)']
@@ -825,7 +860,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
             break
     
     if not target_identifier:
-        await update.message.reply_text("⚠️ Неверный формат")
+        await update.message.reply_text("Неверный формат")
         return
     
     target_info = {"id": None, "username": None}
@@ -840,11 +875,11 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
             target_info["id"] = user_info['user_id']
             target_info["username"] = user_info['username']
         else:
-            await update.message.reply_text("⚠️ Пользователь не найден")
+            await update.message.reply_text("Пользователь не найден")
             return
     
     if target_info["id"] == user_id:
-        await update.message.reply_text("⚠️ Нельзя себе")
+        await update.message.reply_text("Нельзя себе")
         return
     
     save_reputation(
@@ -856,22 +891,21 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         photo_id=update.message.photo[-1].file_id
     )
     
-    await update.message.reply_text("✅ Сохранено")
+    await update.message.reply_text("Сохранено")
     await show_main_menu_from_message(update, context, user_id)
 
 async def show_main_menu_from_message(update: Update, context: CallbackContext, user_id: int):
     """Показать главное меню после отправки репутации"""
-    text = f"""<b>🛡 TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
+    text = f"""<b>TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
 
 Ваш ID: <code>[{user_id}]</code>
 
 Здесь можно смотреть и сохранять репутацию, а при сомнениях — провести сделку через гаранта <i>(в разработке)</i>"""
     
     keyboard = [
-        [InlineKeyboardButton("✍️Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("🗒️Скопировать ID", callback_data='copy_id')],
-        [InlineKeyboardButton("🔎Поиск User", callback_data='search_user')],
-        [InlineKeyboardButton("👤Профиль", callback_data='profile')]
+        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("Найти пользователя", callback_data='search_user')],
+        [InlineKeyboardButton("Профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -894,14 +928,14 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
         target_user = get_user_by_username(username)
     
     if not target_user:
-        await update.message.reply_text("⚠️ Не найден")
+        await update.message.reply_text("Не найден")
         return
     
     context.user_data['found_user_id'] = target_user['user_id']
     
     stats = get_reputation_stats(target_user['user_id'])
     username = target_user.get("username", "")
-    display_username = f"@{username}" if username else f"id{target_user['user_id']}"
+    display_username = f"👤@{username}" if username else f"👤id{target_user['user_id']}"
     
     if target_user.get("registered_at"):
         try:
@@ -912,17 +946,17 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
     else:
         registration_date = datetime.now().strftime("%d/%m/%Y")
     
-    text = f"""👤 <b>{display_username} (ID: {target_user['user_id']})</b>
+    text = f"""{display_username} (ID: {target_user['user_id']})
 
-<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote>
+<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-<blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
+📆 Зарегистрирован: {registration_date}
 
-📆 <b>Зарегистрирован:</b> {registration_date}"""
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
     
     keyboard = [
-        [InlineKeyboardButton("🏆Посмотреть репутацию", callback_data='view_found_user_reputation')],
-        [InlineKeyboardButton("↩️Назад", callback_data='search_user')]
+        [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+        [InlineKeyboardButton("Назад", callback_data='search_user')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -934,14 +968,14 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
 def main():
     """Основная функция запуска"""
     print("=" * 60)
-    print("🛡 TESS REPUTATION BOT")
+    print("TESS REPUTATION BOT")
     print("=" * 60)
     
     # Определяем платформу
     if is_railway():
-        print("🚂 Платформа: Railway (PostgreSQL)")
+        print("Платформа: Railway (PostgreSQL)")
     elif is_replit():
-        print("🔄 Платформа: Replit (SQLite)")
+        print("Платформа: Replit (SQLite)")
         # Запускаем Flask только на Replit
         try:
             from flask import Flask
@@ -950,20 +984,20 @@ def main():
             app = Flask('')
             @app.route('/')
             def home(): 
-                return "✅ Бот работает!"
+                return "Бот работает!"
             
             def run():
                 app.run(host='0.0.0.0', port=8080)
             
             t = Thread(target=run, daemon=True)
             t.start()
-            print("✅ Keep-alive сервер запущен (Replit)")
+            print("Keep-alive сервер запущен (Replit)")
         except ImportError:
-            print("⚠️ Flask не установлен")
+            print("Flask не установлен")
     else:
-        print("💻 Платформа: Локальный запуск (SQLite)")
+        print("Платформа: Локальный запуск (SQLite)")
     
-    print(f"👤 Токен: {'Установлен' if TOKEN else 'Отсутствует!'}")
+    print(f"Токен: {'Установлен' if TOKEN else 'Отсутствует!'}")
     print("=" * 60)
     
     # Инициализация БД
@@ -987,8 +1021,8 @@ def main():
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all_messages))
     
     # Запускаем бота
-    print("🤖 Бот запускается...")
-    print("✅ Готов к работе!")
+    print("Бот запускается...")
+    print("Готов к работе!")
     print("=" * 60)
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
