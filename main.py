@@ -35,6 +35,9 @@ if not TOKEN:
     print("ОШИБКА: TELEGRAM_TOKEN не найден!")
     sys.exit(1)
 
+# Ссылка на фото в GitHub
+PHOTO_URL = "https://raw.githubusercontent.com/sgafa49-png/barabulka/main/IMG_0388.jpeg"
+
 # ========== БАЗА ДАННЫХ (УНИВЕРСАЛЬНАЯ) ==========
 def get_db_connection():
     """Возвращает соединение с БД в зависимости от платформы"""
@@ -267,10 +270,11 @@ def get_reputation_stats(user_id):
     negative = 0
     
     for rep in all_reps:
+        # Обновлено: ищем команду с пробелами
         text_lower = rep["text"].lower()
-        if text_lower.startswith(('+rep', '+реп')):
+        if re.search(r'^[+]\s*(?:rep|реп)', text_lower):
             positive += 1
-        elif text_lower.startswith(('-rep', '-реп')):
+        elif re.search(r'^[-]\s*(?:rep|реп)', text_lower):
             negative += 1
     
     total = positive + negative
@@ -290,7 +294,7 @@ def get_last_positive(user_id):
     """Получить последний положительный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if rep["text"].lower().startswith(('+rep', '+реп')):
+        if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()):
             return rep
     return None
 
@@ -298,7 +302,7 @@ def get_last_negative(user_id):
     """Получить последний отрицательный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if rep["text"].lower().startswith(('-rep', '-реп')):
+        if re.search(r'^[-]\s*(?:rep|реп)', rep["text"].lower()):
             return rep
     return None
 
@@ -359,7 +363,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     if update.message.chat.type in ['group', 'supergroup']:
         keyboard = [
             [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")],
-            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
+            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/tag_eclipse")]
         ]
     else:
         if target_user_id != user_id:
@@ -392,7 +396,7 @@ async def start(update: Update, context: CallbackContext) -> None:
         except:
             pass
     
-    text = f"""<b>🛡️ TESS | Репутация — твоя гарантия безопасности!</b>
+    text = f"""<b>🛡️TESS | Репутация — вселенная безграничных возможностей!</b>
 ID - [{user_id}]
 
 • Здесь можно отправить или просмотреть репутацию пользователя, а также провести сделку! Выберите раздел:"""
@@ -404,7 +408,21 @@ ID - [{user_id}]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    # Отправляем фото с текстом в качестве подписи
+    try:
+        print(f"Отправляю фото по URL: {PHOTO_URL}")
+        await update.message.reply_photo(
+            photo=PHOTO_URL,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+        print("✅ Фото успешно отправлено")
+    except Exception as e:
+        print(f"❌ Ошибка отправки фото: {e}")
+        # Если ошибка - отправляем только текст
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_profile_deeplink(update: Update, target_user_id: int, context: CallbackContext):
     """Показать профиль при переходе из чата"""
@@ -437,7 +455,7 @@ async def show_profile_deeplink(update: Update, target_user_id: int, context: Ca
     context.user_data['found_user_id'] = target_user_id
     
     keyboard = [
-        [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+        [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
         [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
         [InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]
     ]
@@ -465,16 +483,23 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         return
     
     if query.data == 'send_reputation':
-        text = """<b>Отправьте репутацию.</b>
+        text = """<b><i>🛡️Отправьте репутацию.</i></b>
 
-К репутации необходимо приложить хотя бы одну фотографию.
+• К репутации необходимо приложить хотя бы одну фотографию.
+<blockquote>Пример «+rep @username все идеально»
+Пример «-rep [id] сделка не зашла»</blockquote>
 
-Пример «+rep @username все идеально»
-Пример «-rep user_id сделка не зашла»"""
+<b>• Отправляйте репутацию строго по шаблону.</b>"""
         
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+        
+        # Используем edit_message_caption вместо edit_message_text
+        await query.edit_message_caption(
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
         context.user_data['waiting_for_rep'] = True
     
     elif query.data == 'search_user':
@@ -482,7 +507,12 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+        
+        await query.edit_message_caption(
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
         # Устанавливаем флаг ожидания поиска
         context.user_data['waiting_for_search'] = True
     
@@ -544,41 +574,57 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+            [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
             [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
             [InlineKeyboardButton("↩️ Назад", callback_data='search_user')]
         ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    # Используем edit_message_caption вместо edit_message_text
+    await query.edit_message_caption(
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 async def show_my_reputation_menu(query):
     text = "<b>Выберите раздел:</b>"
     
     keyboard = [
-        [InlineKeyboardButton("Положительные", callback_data='show_positive')],
-        [InlineKeyboardButton("Отрицательные", callback_data='show_negative')],
-        [InlineKeyboardButton("Все", callback_data='show_all')],
-        [InlineKeyboardButton("Последний положительный", callback_data='show_last_positive')],
-        [InlineKeyboardButton("Последний отрицательный", callback_data='show_last_negative')],
+        [InlineKeyboardButton("🪄 Положительные", callback_data='show_positive')],
+        [InlineKeyboardButton("🪄 Отрицательные", callback_data='show_negative')],
+        [InlineKeyboardButton("🪄 Все", callback_data='show_all')],
+        [InlineKeyboardButton("🪄 Последний положительный", callback_data='show_last_positive')],
+        [InlineKeyboardButton("🪄 Последний отрицательный", callback_data='show_last_negative')],
         [InlineKeyboardButton("↩️ Назад", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    await query.edit_message_caption(
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 async def show_found_user_reputation_menu(query, target_user_id):
     text = "<b>Выберите раздел:</b>"
     
     keyboard = [
-        [InlineKeyboardButton("Положительные", callback_data='found_show_positive')],
-        [InlineKeyboardButton("Отрицательные", callback_data='found_show_negative')],
-        [InlineKeyboardButton("Все", callback_data='found_show_all')],
+        [InlineKeyboardButton("🪄 Положительные", callback_data='found_show_positive')],
+        [InlineKeyboardButton("🪄 Отрицательные", callback_data='found_show_negative')],
+        [InlineKeyboardButton("🪄 Все", callback_data='found_show_all')],
         [InlineKeyboardButton("↩️ Назад", callback_data='back_to_found_profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    await query.edit_message_caption(
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 async def handle_show_reputation(query):
     user_id = query.from_user.id
@@ -586,12 +632,12 @@ async def handle_show_reputation(query):
     
     if query.data == 'show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if r["text"].lower().startswith(('+rep', '+реп'))]
+                        if re.search(r'^[+]\s*(?:rep|реп)', r["text"].lower())]
         
         if not positive_reps:
-            text = "✅ <b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
+            text = "🪄<b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
         else:
-            text = "✅ <b>Положительные отзывы</b>\n\n"
+            text = "🪄<b>Положительные отзывы</b>\n\n"
             for i, rep in enumerate(positive_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
@@ -604,12 +650,12 @@ async def handle_show_reputation(query):
     
     elif query.data == 'show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if r["text"].lower().startswith(('-rep', '-реп'))]
+                        if re.search(r'^[-]\s*(?:rep|реп)', r["text"].lower())]
         
         if not negative_reps:
-            text = "❌ <b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
+            text = "🪄<b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
         else:
-            text = "❌ <b>Отрицательные отзывы</b>\n\n"
+            text = "🪄<b>Отрицательные отзывы</b>\n\n"
             for i, rep in enumerate(negative_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
@@ -624,13 +670,13 @@ async def handle_show_reputation(query):
         all_reps = stats['all_reps']
         
         if not all_reps:
-            text = "📋 <b>Все отзывы</b>\n\nУ вас еще нет отзывов."
+            text = "🪄<b>Все отзывы</b>\n\nУ вас еще нет отзывов."
         else:
-            text = "📋 <b>Все отзывы</b>\n\n"
+            text = "🪄<b>Все отзывы</b>\n\n"
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if rep["text"].lower().startswith(('+rep', '+реп')) else "❌"
+                sign = "✅" if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -642,11 +688,11 @@ async def handle_show_reputation(query):
         last_positive = get_last_positive(user_id)
         
         if not last_positive:
-            text = "✅ <b>Последний положительный отзыв</b>\n\nУ вас еще нет положительных отзывов."
+            text = "🪄<b>Последний положительный отзыв</b>\n\nУ вас еще нет положительных отзывов."
         else:
             from_user = last_positive.get("from_username", f"id{last_positive['from_user']}")
             date = datetime.fromisoformat(last_positive["created_at"]).strftime("%d/%m/%Y")
-            text = f"""✅ <b>Последний положительный отзыв</b>
+            text = f"""🪄<b>Последный положительный отзыв</b>
 
 От: @{from_user}
 Текст: {last_positive['text']}
@@ -658,11 +704,11 @@ async def handle_show_reputation(query):
         last_negative = get_last_negative(user_id)
         
         if not last_negative:
-            text = "❌ <b>Последний отрицательный отзыв</b>\n\nУ вас еще нет отрицательных отзывов."
+            text = "🪄<b>Последний отрицательный отзыв</b>\n\nУ вас еще нет отрицательных отзывов."
         else:
             from_user = last_negative.get("from_username", f"id{last_negative['from_user']}")
             date = datetime.fromisoformat(last_negative["created_at"]).strftime("%d/%m/%Y")
-            text = f"""❌ <b>Последний отрицательный отзыв</b>
+            text = f"""🪄<b>Последний отрицательный отзыв</b>
 
 От: @{from_user}
 Текст: {last_negative['text']}
@@ -672,7 +718,12 @@ async def handle_show_reputation(query):
     
     keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data=back_button)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    await query.edit_message_caption(
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 async def handle_found_user_reputation(query, context):
     target_user_id = context.user_data.get('found_user_id')
@@ -686,12 +737,12 @@ async def handle_found_user_reputation(query, context):
     
     if query.data == 'found_show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if r["text"].lower().startswith(('+rep', '+реп'))]
+                        if re.search(r'^[+]\s*(?:rep|реп)', r["text"].lower())]
         
         if not positive_reps:
-            text = f"✅ <b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
+            text = f"🪄<b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
         else:
-            text = f"✅ <b>Положительные отзывы @{username}</b>\n\n"
+            text = f"🪄<b>Положительные отзывы @{username}</b>\n\n"
             for i, rep in enumerate(positive_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
@@ -704,12 +755,12 @@ async def handle_found_user_reputation(query, context):
     
     elif query.data == 'found_show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if r["text"].lower().startswith(('-rep', '-реп'))]
+                        if re.search(r'^[-]\s*(?:rep|реп)', r["text"].lower())]
         
         if not negative_reps:
-            text = f"❌ <b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
+            text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
         else:
-            text = f"❌ <b>Отрицательные отзывы @{username}</b>\n\n"
+            text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\n"
             for i, rep in enumerate(negative_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
@@ -724,13 +775,13 @@ async def handle_found_user_reputation(query, context):
         all_reps = stats['all_reps']
         
         if not all_reps:
-            text = f"📋 <b>Все отзывы @{username}</b>\n\nУ пользователя еще нет отзывов."
+            text = f"🪄<b>Все отзывы @{username}</b>\n\nУ пользователя еще нет отзывов."
         else:
-            text = f"📋 <b>Все отзывы @{username}</b>\n\n"
+            text = f"🪄<b>Все отзывы @{username}</b>\n\n"
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if rep["text"].lower().startswith(('+rep', '+реп')) else "❌"
+                sign = "✅" if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -740,11 +791,16 @@ async def handle_found_user_reputation(query, context):
     
     keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data=back_button)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    await query.edit_message_caption(
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 async def show_main_menu(query):
     user_id = query.from_user.id
-    text = f"""<b>🛡️ TESS | Репутация — твоя гарантия безопасности!</b>
+    text = f"""<b>🛡️TESS | Репутация — твоя гарантия безопасности!</b>
 ID - [{user_id}]
 
 • Здесь можно отправить или просмотреть репутацию пользователя, а также провести сделку! Выберите раздел:"""
@@ -756,10 +812,19 @@ ID - [{user_id}]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
+    
+    await query.edit_message_caption(
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
 
 async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     """Обработка ВСЕХ сообщений"""
+    # Проверяем, что есть message
+    if not update.message:
+        return
+    
     user_id = update.effective_user.id
     username = update.effective_user.username or f"id{user_id}"
     save_user(user_id, username)
@@ -779,25 +844,40 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     user_id = update.effective_user.id
     text = update.message.text or update.message.caption or ""
     
-    patterns = [
-        r'[-+](?:rep|реп)\s+(@?\w+)',
-        r'[-+](?:rep|реп)\s+(\d+)',
-    ]
+    # Проверяем, является ли это командой репутации
+    clean_text = text.strip().lower()
     
-    has_rep_pattern = False
-    for pattern in patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            has_rep_pattern = True
-            break
+    is_rep_command = False
     
-    if has_rep_pattern and not update.message.photo:
+    # Проверка начала сообщения с поддержкой пробелов
+    if re.search(r'^[-+]\s*(?:rep|реп)', clean_text):
+        is_rep_command = True
+    
+    # Проверка после переноса строки
+    if not is_rep_command and '\n' in text:
+        lines = text.lower().split('\n')
+        for line in lines:
+            if re.search(r'^[-+]\s*(?:rep|реп)', line.strip()):
+                is_rep_command = True
+                break
+    
+    # Если это НЕ команда репутации - игнорируем
+    if not is_rep_command:
+        return
+    
+    # Проверяем наличие фото
+    if not update.message.photo:
         await update.message.reply_text("❗️ <b>Необходимо прикрепить фото/скриншот</b>", parse_mode='HTML')
         return
     
-    if not update.message.photo:
-        return
-    
+    # Получаем целевого пользователя из текста
     target_identifier = None
+    
+    # Паттерны для поиска username/id в команде репутации (с поддержкой пробелов)
+    patterns = [
+        r'[-+]\s*(?:rep|реп)\s+(@?\w+)',
+        r'[-+]\s*(?:rep|реп)\s+(\d+)',
+    ]
     
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -844,7 +924,8 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
         photo_id=update.message.photo[-1].file_id
     )
     
-    await update.message.reply_text("Сохранено")
+    # ОБНОВЛЕНО: Заменено на жирный текст с эмодзи
+    await update.message.reply_text("✅ <b>Репутация сохранена</b>", parse_mode='HTML')
 
 async def handle_reputation_message_pm(update: Update, context: CallbackContext) -> None:
     """Обработка репутации в личных сообщениях"""
@@ -855,7 +936,12 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         await update.message.reply_text("❗️ <b>Необходимо прикрепить фото/скриншот</b>", parse_mode='HTML')
         return
     
-    patterns = [r'[-+](?:rep|реп)\s+(@?\w+)']
+    # Если текст пустой, просим добавить текст к фото
+    if not text.strip():
+        await update.message.reply_text("❌ <b>Добавьте текст к фото!</b>\n\nПример: +rep @username сделка прошла успешно", parse_mode='HTML')
+        return
+    
+    patterns = [r'[-+]\s*(?:rep|реп)\s+(@?\w+)']
     target_identifier = None
     
     for pattern in patterns:
@@ -865,7 +951,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
             break
     
     if not target_identifier:
-        await update.message.reply_text("Неверный формат")
+        await update.message.reply_text("❌ <b>Неверный формат</b>\n\nИспользуйте: +rep @username или -rep @username", parse_mode='HTML')
         return
     
     target_info = {"id": None, "username": None}
@@ -896,12 +982,12 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         photo_id=update.message.photo[-1].file_id
     )
     
-    await update.message.reply_text("Сохранено")
+    await update.message.reply_text("✅ <b>Репутация сохранена!</b>", parse_mode='HTML')
     await show_main_menu_from_message(update, context, user_id)
 
 async def show_main_menu_from_message(update: Update, context: CallbackContext, user_id: int):
     """Показать главное меню после отправки репутации"""
-    text = f"""<b>🛡️ TESS | Репутация — твоя гарантия безопасности!</b>
+    text = f"""<b>🛡️TESS | Репутация — твоя гарантия безопасности!</b>
 ID - [{user_id}]
 
 • Здесь можно отправить или просмотреть репутацию пользователя, а также провести сделку! Выберите раздел:"""
@@ -987,13 +1073,13 @@ def main():
             from flask import Flask
             from threading import Thread
             
-            app = Flask('')
-            @app.route('/')
+            app_flask = Flask('')
+            @app_flask.route('/')
             def home(): 
                 return "Бот работает!"
             
             def run():
-                app.run(host='0.0.0.0', port=8080)
+                app_flask.run(host='0.0.0.0', port=8080)
             
             t = Thread(target=run, daemon=True)
             t.start()
@@ -1004,6 +1090,7 @@ def main():
         print("Платформа: Локальный запуск (SQLite)")
     
     print(f"Токен: {'Установлен' if TOKEN else 'Отсутствует!'}")
+    print(f"URL фото: {PHOTO_URL}")
     print("=" * 60)
     
     # Инициализация БД
@@ -1031,6 +1118,7 @@ def main():
     print("Готов к работе!")
     print("=" * 60)
     
+    # Простой запуск
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
