@@ -326,7 +326,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
                 target_user_id = user_info['user_id']
                 target_username = user_info['username'] or f"id{target_user_id}"
             else:
-                await update.message.reply_text("Не найден")
+                await update.message.reply_text("❌ <b>Пользователь не найден</b>", parse_mode='HTML')
                 return
     else:
         target_user_id = user_id
@@ -350,25 +350,28 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
 
 <blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-📆 Зарегистрирован: {registration_date}
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>
 
-<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
+💳 Депозит: отсутствует
+
+🗓️ Зарегистрирован: {registration_date}"""
     
     if update.message.chat.type in ['group', 'supergroup']:
         keyboard = [
-            [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")]
+            [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")],
+            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
         ]
     else:
         if target_user_id != user_id:
             context.user_data['found_user_id'] = target_user_id
             keyboard = [
                 [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
-                [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')]
+                [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')]
             ]
         else:
             keyboard = [
-                [InlineKeyboardButton("Моя репутация", callback_data='my_reputation')],
-                [InlineKeyboardButton("Полный профиль", callback_data='profile')]
+                [InlineKeyboardButton("🏆 Моя репутация", callback_data='my_reputation')],
+                [InlineKeyboardButton("🏆 Мой профиль", callback_data='profile')]
             ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -389,16 +392,15 @@ async def start(update: Update, context: CallbackContext) -> None:
         except:
             pass
     
-    text = f"""<b>TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
+    text = f"""<b>🛡️ TESS | Репутация — твоя гарантия безопасности!</b>
+ID - [{user_id}]
 
-Ваш ID: <code>[{user_id}]</code>
-
-Здесь можно смотреть и сохранять репутацию, а при сомнениях — провести сделку через гаранта <i>(в разработке)</i>"""
+• Здесь можно отправить или просмотреть репутацию пользователя, а также провести сделку! Выберите раздел:"""
     
     keyboard = [
-        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("Найти пользователя", callback_data='search_user')],
-        [InlineKeyboardButton("Профиль", callback_data='profile')]
+        [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("🔎 Найти пользователя", callback_data='search_user')],
+        [InlineKeyboardButton("🏆 Мой профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -426,16 +428,18 @@ async def show_profile_deeplink(update: Update, target_user_id: int, context: Ca
 
 <blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-📆 Зарегистрирован: {registration_date}
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>
 
-<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
+💳 Депозит: отсутствует
+
+🗓️ Зарегистрирован: {registration_date}"""
     
     context.user_data['found_user_id'] = target_user_id
     
     keyboard = [
         [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
-        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("Главное меню", callback_data='back_to_main')]
+        [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -468,17 +472,17 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
 Пример «+rep @username все идеально»
 Пример «-rep user_id сделка не зашла»"""
         
-        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
+        keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
         context.user_data['waiting_for_rep'] = True
     
     elif query.data == 'search_user':
-        text = "**Поиск пользователя**\n\nВведите username или ID пользователя:"
+        text = "🛡️<b>Введите username/id пользователя:</b>"
         
-        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
+        keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
         # Устанавливаем флаг ожидания поиска
         context.user_data['waiting_for_search'] = True
     
@@ -527,20 +531,22 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
 
 <blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-📆 Зарегистрирован: {registration_date}
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>
 
-<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
+💳 Депозит: отсутствует
+
+🗓️ Зарегистрирован: {registration_date}"""
     
     if is_own_profile:
         keyboard = [
-            [InlineKeyboardButton("Моя репутация", callback_data='my_reputation')],
-            [InlineKeyboardButton("Назад", callback_data='back_to_main')]
+            [InlineKeyboardButton("🏆 Моя репутация", callback_data='my_reputation')],
+            [InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]
         ]
     else:
         keyboard = [
             [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
-            [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
-            [InlineKeyboardButton("Назад к поиску", callback_data='search_user')]
+            [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
+            [InlineKeyboardButton("↩️ Назад", callback_data='search_user')]
         ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -555,7 +561,7 @@ async def show_my_reputation_menu(query):
         [InlineKeyboardButton("Все", callback_data='show_all')],
         [InlineKeyboardButton("Последний положительный", callback_data='show_last_positive')],
         [InlineKeyboardButton("Последний отрицательный", callback_data='show_last_negative')],
-        [InlineKeyboardButton("Назад в профиль", callback_data='profile')]
+        [InlineKeyboardButton("↩️ Назад", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -568,7 +574,7 @@ async def show_found_user_reputation_menu(query, target_user_id):
         [InlineKeyboardButton("Положительные", callback_data='found_show_positive')],
         [InlineKeyboardButton("Отрицательные", callback_data='found_show_negative')],
         [InlineKeyboardButton("Все", callback_data='found_show_all')],
-        [InlineKeyboardButton("Назад в профиль", callback_data='back_to_found_profile')]
+        [InlineKeyboardButton("↩️ Назад", callback_data='back_to_found_profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -664,7 +670,7 @@ async def handle_show_reputation(query):
         
         back_button = 'my_reputation'
     
-    keyboard = [[InlineKeyboardButton("Назад", callback_data=back_button)]]
+    keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data=back_button)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
@@ -732,22 +738,21 @@ async def handle_found_user_reputation(query, context):
         
         back_button = 'view_found_user_reputation'
     
-    keyboard = [[InlineKeyboardButton("Назад", callback_data=back_button)]]
+    keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data=back_button)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_main_menu(query):
     user_id = query.from_user.id
-    text = f"""<b>TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
+    text = f"""<b>🛡️ TESS | Репутация — твоя гарантия безопасности!</b>
+ID - [{user_id}]
 
-Ваш ID: <code>[{user_id}]</code>
-
-Здесь можно смотреть и сохранять репутацию, а при сомнениях — провести сделку через гаранта <i>(в разработке)</i>"""
+• Здесь можно отправить или просмотреть репутацию пользователя, а также провести сделку! Выберите раздел:"""
     
     keyboard = [
-        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("Найти пользователя", callback_data='search_user')],
-        [InlineKeyboardButton("Профиль", callback_data='profile')]
+        [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("🔎 Найти пользователя", callback_data='search_user')],
+        [InlineKeyboardButton("🏆 Мой профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -786,7 +791,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             break
     
     if has_rep_pattern and not update.message.photo:
-        await update.message.reply_text("Нужно фото")
+        await update.message.reply_text("❗️ <b>Необходимо прикрепить фото/скриншот</b>", parse_mode='HTML')
         return
     
     if not update.message.photo:
@@ -823,7 +828,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             target_info["id"] = user_info['user_id']
             target_info["username"] = user_info['username']
         else:
-            await update.message.reply_text("Пользователь не найден\nИспользуйте реплай или ID")
+            await update.message.reply_text("❌ <b>Пользователь не найден</b>\nИспользуйте реплай или ID", parse_mode='HTML')
             return
     
     if target_info["id"] == user_id:
@@ -847,7 +852,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
     text = update.message.text or update.message.caption or ""
     
     if not update.message.photo:
-        await update.message.reply_text("Нужно фото")
+        await update.message.reply_text("❗️ <b>Необходимо прикрепить фото/скриншот</b>", parse_mode='HTML')
         return
     
     patterns = [r'[-+](?:rep|реп)\s+(@?\w+)']
@@ -875,7 +880,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
             target_info["id"] = user_info['user_id']
             target_info["username"] = user_info['username']
         else:
-            await update.message.reply_text("Пользователь не найден")
+            await update.message.reply_text("❌ <b>Пользователь не найден</b>", parse_mode='HTML')
             return
     
     if target_info["id"] == user_id:
@@ -896,16 +901,15 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
 
 async def show_main_menu_from_message(update: Update, context: CallbackContext, user_id: int):
     """Показать главное меню после отправки репутации"""
-    text = f"""<b>TESS | Репутация</b> — <i>твоя гарантия безопасности</i>.
+    text = f"""<b>🛡️ TESS | Репутация — твоя гарантия безопасности!</b>
+ID - [{user_id}]
 
-Ваш ID: <code>[{user_id}]</code>
-
-Здесь можно смотреть и сохранять репутацию, а при сомнениях — провести сделку через гаранта <i>(в разработке)</i>"""
+• Здесь можно отправить или просмотреть репутацию пользователя, а также провести сделку! Выберите раздел:"""
     
     keyboard = [
-        [InlineKeyboardButton("Отправить репутацию", callback_data='send_reputation')],
-        [InlineKeyboardButton("Найти пользователя", callback_data='search_user')],
-        [InlineKeyboardButton("Профиль", callback_data='profile')]
+        [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
+        [InlineKeyboardButton("🔎 Найти пользователя", callback_data='search_user')],
+        [InlineKeyboardButton("🏆 Мой профиль", callback_data='profile')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -928,7 +932,7 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
         target_user = get_user_by_username(username)
     
     if not target_user:
-        await update.message.reply_text("Не найден")
+        await update.message.reply_text("❌ <b>Пользователь не найден</b>", parse_mode='HTML')
         return
     
     context.user_data['found_user_id'] = target_user['user_id']
@@ -950,13 +954,15 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
 
 <blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
 
-📆 Зарегистрирован: {registration_date}
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>
 
-<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>"""
+💳 Депозит: отсутствует
+
+🗓️ Зарегистрирован: {registration_date}"""
     
     keyboard = [
         [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
-        [InlineKeyboardButton("Назад", callback_data='search_user')]
+        [InlineKeyboardButton("↩️ Назад", callback_data='search_user')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
