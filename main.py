@@ -15,43 +15,25 @@ from telegram.ext import (
 
 # ========== НАСТРОЙКИ СРЕДЫ ==========
 def is_railway():
-    """Всегда возвращаем True на Railway"""
-    # Если есть DATABASE_URL с railway.app - точно Railway
+    """Проверяем что мы на Railway"""
+    # Простая проверка по DATABASE_URL
     db_url = os.environ.get('DATABASE_URL', '')
-    return 'railway.app' in db_url
-    
-    # Проверяем Railway переменные
-    railway_vars = ['RAILWAY_ENVIRONMENT', 'RAILWAY_GIT_COMMIT_SHA', 'RAILWAY_GIT_AUTHOR']
-    for var in railway_vars:
-        if var in os.environ:
-            return True
-    
-    # Проверяем DATABASE_URL (только если это Railway URL)
-    db_url = os.environ.get('DATABASE_URL', '')
-    if db_url and 'railway.app' in db_url and db_url.startswith('postgresql://'):
-        return True
-    
-    return False
+    return 'railway.app' in db_url and db_url.startswith('postgresql://')
 
 def is_replit():
     """Проверяем, запущены ли на Replit"""
     return 'REPL_ID' in os.environ
 
-# Очистка переменных если на Replit (важно для корректной работы)
+# Очистка переменных если на Replit
 if is_replit():
-    # Мы на Replit - удаляем Railway переменные чтобы не мешали
     os.environ.pop('DATABASE_URL', None)
     os.environ.pop('RAILWAY_ENVIRONMENT', None)
-    os.environ.pop('RAILWAY_GIT_COMMIT_SHA', None)
-    os.environ.pop('RAILWAY_GIT_AUTHOR', None)
     print("🧹 Очищены Railway переменные (Replit режим)")
 
 # Получаем токен
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
     print("❌ ОШИБКА: TELEGRAM_TOKEN не найден!")
-    print("👉 На Replit: добавь в Secrets (Tools → Secrets)")
-    print("👉 На Railway: добавь в Environment Variables")
     sys.exit(1)
 
 # ========== БАЗА ДАННЫХ (УНИВЕРСАЛЬНАЯ) ==========
@@ -59,17 +41,14 @@ def get_db_connection():
     """Возвращает соединение с БД в зависимости от платформы"""
     if is_railway():
         try:
-            # Пытаемся использовать PostgreSQL на Railway
             import psycopg2
             DATABASE_URL = os.environ.get('DATABASE_URL')
             if DATABASE_URL:
                 conn = psycopg2.connect(DATABASE_URL, sslmode='require')
                 print("✅ Подключено к PostgreSQL (Railway)")
                 return conn
-        except ImportError:
-            print("⚠️ psycopg2 не установлен, используем SQLite")
         except Exception as e:
-            print(f"⚠️ Ошибка PostgreSQL: {e}, используем SQLite")
+            print(f"⚠️ Ошибка PostgreSQL: {e}")
     
     # На Replit или при ошибке - используем SQLite
     conn = sqlite3.connect('reputation.db')
@@ -83,32 +62,47 @@ def init_db():
     
     if is_railway():
         # PostgreSQL для Railway
-        cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                         (user_id BIGINT PRIMARY KEY,
-                          username TEXT,
-                          registered_at TEXT)''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS reputation
-                         (id SERIAL PRIMARY KEY,
-                          from_user BIGINT,
-                          to_user BIGINT,
-                          text TEXT,
-                          photo_id TEXT,
-                          created_at TEXT)''')
+        try:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    registered_at TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS reputation (
+                    id SERIAL PRIMARY KEY,
+                    from_user BIGINT,
+                    to_user BIGINT,
+                    text TEXT,
+                    photo_id TEXT,
+                    created_at TEXT
+                )
+            ''')
+        except Exception as e:
+            print(f"⚠️ Ошибка создания таблиц PostgreSQL: {e}")
     else:
-        # SQLite для Replit и локальной разработки
-        cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                         (user_id INTEGER PRIMARY KEY,
-                          username TEXT,
-                          registered_at TEXT)''')
+        # SQLite для Replit
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                registered_at TEXT
+            )
+        ''')
         
-        cursor.execute('''CREATE TABLE IF NOT EXISTS reputation
-                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                          from_user INTEGER,
-                          to_user INTEGER,
-                          text TEXT,
-                          photo_id TEXT,
-                          created_at TEXT)''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reputation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_user INTEGER,
+                to_user INTEGER,
+                text TEXT,
+                photo_id TEXT,
+                created_at TEXT
+            )
+        ''')
     
     conn.commit()
     conn.close()
@@ -120,83 +114,97 @@ def save_user(user_id, username):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if is_railway():
-        # PostgreSQL
-        cursor.execute('''
-            INSERT INTO users (user_id, username, registered_at) 
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE 
-            SET username = EXCLUDED.username
-        ''', (user_id, username, datetime.now().isoformat()))
-    else:
-        # SQLite
-        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        if not cursor.fetchone():
-            cursor.execute('INSERT INTO users VALUES (?, ?, ?)',
-                          (user_id, username, datetime.now().isoformat()))
+    try:
+        if is_railway():
+            # PostgreSQL синтаксис
+            cursor.execute('''
+                INSERT INTO users (user_id, username, registered_at) 
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE 
+                SET username = EXCLUDED.username
+            ''', (user_id, username, datetime.now().isoformat()))
         else:
-            cursor.execute('UPDATE users SET username = ? WHERE user_id = ?', 
-                         (username, user_id))
-    
-    conn.commit()
-    conn.close()
+            # SQLite синтаксис
+            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+            if not cursor.fetchone():
+                cursor.execute('INSERT INTO users VALUES (?, ?, ?)',
+                              (user_id, username, datetime.now().isoformat()))
+            else:
+                cursor.execute('UPDATE users SET username = ? WHERE user_id = ?', 
+                             (username, user_id))
+        
+        conn.commit()
+    except Exception as e:
+        print(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+    finally:
+        conn.close()
 
 def save_reputation(from_user, from_username, to_user, to_username, text, photo_id):
     """Сохраняем репутацию в БД"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     save_user(from_user, from_username)
     save_user(to_user, to_username)
     
-    if is_railway():
-        # PostgreSQL
-        cursor.execute('''INSERT INTO reputation 
-                         (from_user, to_user, text, photo_id, created_at)
-                         VALUES (%s, %s, %s, %s, %s)''',
-                      (from_user, to_user, text, photo_id, datetime.now().isoformat()))
-    else:
-        # SQLite
-        cursor.execute('''INSERT INTO reputation 
-                         (from_user, to_user, text, photo_id, created_at)
-                         VALUES (?, ?, ?, ?, ?)''',
-                      (from_user, to_user, text, photo_id, datetime.now().isoformat()))
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
-    conn.commit()
-    conn.close()
+    try:
+        if is_railway():
+            cursor.execute('''
+                INSERT INTO reputation (from_user, to_user, text, photo_id, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (from_user, to_user, text, photo_id, datetime.now().isoformat()))
+        else:
+            cursor.execute('''
+                INSERT INTO reputation (from_user, to_user, text, photo_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (from_user, to_user, text, photo_id, datetime.now().isoformat()))
+        
+        conn.commit()
+    except Exception as e:
+        print(f"❌ Ошибка сохранения репутации: {e}")
+    finally:
+        conn.close()
 
 def get_user_reputation(user_id):
     """Получаем всю репутацию пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if is_railway():
-        cursor.execute('''SELECT r.*, u.username as from_username 
-                         FROM reputation r
-                         LEFT JOIN users u ON r.from_user = u.user_id
-                         WHERE r.to_user = %s
-                         ORDER BY r.created_at DESC''', (user_id,))
-    else:
-        cursor.execute('''SELECT r.*, u.username as from_username 
-                         FROM reputation r
-                         LEFT JOIN users u ON r.from_user = u.user_id
-                         WHERE r.to_user = ?
-                         ORDER BY r.created_at DESC''', (user_id,))
-    
-    rows = cursor.fetchall()
-    conn.close()
-    
     reps = []
-    for row in rows:
-        reps.append({
-            'id': row[0],
-            'from_user': row[1],
-            'to_user': row[2],
-            'text': row[3],
-            'photo_id': row[4],
-            'created_at': row[5],
-            'from_username': row[6] or f"id{row[1]}"
-        })
+    try:
+        if is_railway():
+            cursor.execute('''
+                SELECT r.*, u.username as from_username 
+                FROM reputation r
+                LEFT JOIN users u ON r.from_user = u.user_id
+                WHERE r.to_user = %s
+                ORDER BY r.created_at DESC
+            ''', (user_id,))
+        else:
+            cursor.execute('''
+                SELECT r.*, u.username as from_username 
+                FROM reputation r
+                LEFT JOIN users u ON r.from_user = u.user_id
+                WHERE r.to_user = ?
+                ORDER BY r.created_at DESC
+            ''', (user_id,))
+        
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            reps.append({
+                'id': row[0],
+                'from_user': row[1],
+                'to_user': row[2],
+                'text': row[3],
+                'photo_id': row[4],
+                'created_at': row[5],
+                'from_username': row[6] or f"id{row[1]}"
+            })
+    except Exception as e:
+        print(f"❌ Ошибка получения репутации: {e}")
+    finally:
+        conn.close()
     
     return reps
 
@@ -205,20 +213,25 @@ def get_user_info(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if is_railway():
-        cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
-    else:
-        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+    try:
+        if is_railway():
+            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
+        else:
+            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        
+        row = cursor.fetchone()
+        
+        if row:
+            return {
+                'user_id': row[0],
+                'username': row[1],
+                'registered_at': row[2]
+            }
+    except Exception as e:
+        print(f"❌ Ошибка получения пользователя {user_id}: {e}")
+    finally:
+        conn.close()
     
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {
-            'user_id': row[0],
-            'username': row[1],
-            'registered_at': row[2]
-        }
     return None
 
 def get_user_by_username(username):
@@ -228,20 +241,25 @@ def get_user_by_username(username):
     
     username = username.lstrip('@')
     
-    if is_railway():
-        cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
-    else:
-        cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+    try:
+        if is_railway():
+            cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
+        else:
+            cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+        
+        row = cursor.fetchone()
+        
+        if row:
+            return {
+                'user_id': row[0],
+                'username': row[1],
+                'registered_at': row[2]
+            }
+    except Exception as e:
+        print(f"❌ Ошибка поиска пользователя {username}: {e}")
+    finally:
+        conn.close()
     
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {
-            'user_id': row[0],
-            'username': row[1],
-            'registered_at': row[2]
-        }
     return None
 
 def get_reputation_stats(user_id):
@@ -922,7 +940,6 @@ def main():
     # Определяем платформу
     if is_railway():
         print("🚂 Платформа: Railway (PostgreSQL)")
-        print("ℹ️  Flask сервер отключен на Railway")
     elif is_replit():
         print("🔄 Платформа: Replit (SQLite)")
         # Запускаем Flask только на Replit
@@ -935,10 +952,6 @@ def main():
             def home(): 
                 return "✅ Бот работает!"
             
-            @app.route('/health')
-            def health():
-                return "OK", 200
-            
             def run():
                 app.run(host='0.0.0.0', port=8080)
             
@@ -946,9 +959,7 @@ def main():
             t.start()
             print("✅ Keep-alive сервер запущен (Replit)")
         except ImportError:
-            print("⚠️ Flask не установлен, keep-alive не запущен")
-        except Exception as e:
-            print(f"⚠️ Ошибка Flask: {e}")
+            print("⚠️ Flask не установлен")
     else:
         print("💻 Платформа: Локальный запуск (SQLite)")
     
