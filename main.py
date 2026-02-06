@@ -36,7 +36,7 @@ if not TOKEN:
     sys.exit(1)
 
 # Ссылка на фото в GitHub
-PHOTO_URL = "https://raw.githubusercontent.com/sgafa49-png/barabulka/main/IMG_0388.jpeg"
+PHOTO_URL = "https://raw.githubusercontent.com/sgafa49-png/tess-reputation-bot/main/IMG_0354.jpeg"
 
 # ========== БАЗА ДАННЫХ (УНИВЕРСАЛЬНАЯ) ==========
 def get_db_connection():
