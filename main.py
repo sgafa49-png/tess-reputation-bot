@@ -15,10 +15,10 @@ from telegram.ext import (
 
 # ========== НАСТРОЙКИ СРЕДЫ ==========
 def is_railway():
-    """Точная проверка что мы на Railway"""
-    # Проверяем только если есть Railway переменные И мы не на Replit
-    if 'REPL_ID' in os.environ:
-        return False  # Мы точно на Replit
+    """Всегда возвращаем True на Railway"""
+    # Если есть DATABASE_URL с railway.app - точно Railway
+    db_url = os.environ.get('DATABASE_URL', '')
+    return 'railway.app' in db_url
     
     # Проверяем Railway переменные
     railway_vars = ['RAILWAY_ENVIRONMENT', 'RAILWAY_GIT_COMMIT_SHA', 'RAILWAY_GIT_AUTHOR']
