@@ -111,46 +111,38 @@ def init_db():
     print("База данных инициализирована")
 
 # ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
-def ensure_user_in_db(user_id, username):
-    """Гарантирует что пользователь есть в базе (создаёт если нет)"""
+def save_user(user_id, username):
+    """Сохраняем пользователя в БД"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
         if is_railway():
-            cursor.execute('SELECT 1 FROM users WHERE user_id = %s', (user_id,))
+            cursor.execute('''
+                INSERT INTO users (user_id, username, registered_at) 
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE 
+                SET username = EXCLUDED.username
+            ''', (user_id, username, datetime.now().isoformat()))
         else:
-            cursor.execute('SELECT 1 FROM users WHERE user_id = ?', (user_id,))
-        
-        if not cursor.fetchone():
-            # Пользователя нет - создаём
-            if is_railway():
-                cursor.execute('''
-                    INSERT INTO users (user_id, username, registered_at) 
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id) DO NOTHING
-                ''', (user_id, username, datetime.now().isoformat()))
+            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+            if not cursor.fetchone():
+                cursor.execute('INSERT INTO users VALUES (?, ?, ?)',
+                              (user_id, username, datetime.now().isoformat()))
             else:
-                cursor.execute('SELECT 1 FROM users WHERE user_id = ?', (user_id,))
-                if not cursor.fetchone():
-                    cursor.execute('INSERT OR IGNORE INTO users VALUES (?, ?, ?)',
-                                 (user_id, username, datetime.now().isoformat()))
-            conn.commit()
-            print(f"✅ Авторегистрация: {user_id} (@{username})")
+                cursor.execute('UPDATE users SET username = ? WHERE user_id = ?', 
+                             (username, user_id))
+        
+        conn.commit()
     except Exception as e:
-        print(f"❌ Ошибка авторегистрации {user_id}: {e}")
+        print(f"Ошибка сохранения пользователя {user_id}: {e}")
     finally:
         conn.close()
 
-def save_user(user_id, username):
-    """Сохраняем пользователя в БД"""
-    ensure_user_in_db(user_id, username)
-
 def save_reputation(from_user, from_username, to_user, to_username, text, photo_id):
     """Сохраняем репутацию в БД"""
-    # Гарантируем что оба пользователя есть в базе
-    ensure_user_in_db(from_user, from_username)
-    ensure_user_in_db(to_user, to_username)
+    save_user(from_user, from_username)
+    save_user(to_user, to_username)
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -279,9 +271,9 @@ def get_reputation_stats(user_id):
     
     for rep in all_reps:
         text_lower = rep["text"].lower()
-        if re.search(r'\b[+]\s*(?:rep|реп)\b', text_lower, re.IGNORECASE):
+        if re.search(r'^[+]\s*(?:rep|реп)', text_lower):
             positive += 1
-        elif re.search(r'\b[-]\s*(?:rep|реп)\b', text_lower, re.IGNORECASE):
+        elif re.search(r'^[-]\s*(?:rep|реп)', text_lower):
             negative += 1
     
     total = positive + negative
@@ -301,7 +293,7 @@ def get_last_positive(user_id):
     """Получить последний положительный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE):
+        if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()):
             return rep
     return None
 
@@ -309,7 +301,7 @@ def get_last_negative(user_id):
     """Получить последний отрицательный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'\b[-]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE):
+        if re.search(r'^[-]\s*(?:rep|реп)', rep["text"].lower()):
             return rep
     return None
 
@@ -434,7 +426,7 @@ ID - [{user_id}]
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
-    """Показать профиль пользователя с РАБОЧАЮЩИМИ кнопками при переходе из чата"""
+    """Показать профиль пользователя с РАБОТАЮЩИМИ кнопками при переходе из чата"""
     user_id = update.effective_user.id
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
@@ -707,7 +699,7 @@ async def handle_show_reputation(query):
     
     if query.data == 'show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+                        if re.search(r'^[+]\s*(?:rep|реп)', r["text"].lower())]
         
         if not positive_reps:
             text = "🪄<b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
@@ -725,7 +717,7 @@ async def handle_show_reputation(query):
     
     elif query.data == 'show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+                        if re.search(r'^[-]\s*(?:rep|реп)', r["text"].lower())]
         
         if not negative_reps:
             text = "🪄<b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
@@ -751,7 +743,7 @@ async def handle_show_reputation(query):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE) else "❌"
+                sign = "✅" if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -822,7 +814,7 @@ async def handle_found_user_reputation(query, context):
     
     if query.data == 'found_show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+                        if re.search(r'^[+]\s*(?:rep|реп)', r["text"].lower())]
         
         if not positive_reps:
             text = f"🪄<b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
@@ -840,7 +832,7 @@ async def handle_found_user_reputation(query, context):
     
     elif query.data == 'found_show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+                        if re.search(r'^[-]\s*(?:rep|реп)', r["text"].lower())]
         
         if not negative_reps:
             text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
@@ -866,7 +858,7 @@ async def handle_found_user_reputation(query, context):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE) else "❌"
+                sign = "✅" if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -958,10 +950,21 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     text = update.message.text or update.message.caption or ""
     
     # Проверяем, является ли это командой репутации
-    # ИЩЕМ +rep ИЛИ -rep КАК ОТДЕЛЬНОЕ СЛОВО В ЛЮБОМ МЕСТЕ
-    # Используем \b для границ слова, чтобы не ловить "+репутации"
-    # Добавляем re.IGNORECASE для игнорирования регистра
-    is_rep_command = bool(re.search(r'\b[+-]\s*(?:rep|реп)\b', text, re.IGNORECASE))
+    clean_text = text.strip().lower()
+    
+    is_rep_command = False
+    
+    # Проверка начала сообщения с поддержкой пробелов
+    if re.search(r'^[-+]\s*(?:rep|реп)', clean_text):
+        is_rep_command = True
+    
+    # Проверка после переноса строки
+    if not is_rep_command and '\n' in text:
+        lines = text.lower().split('\n')
+        for line in lines:
+            if re.search(r'^[-+]\s*(?:rep|реп)', line.strip()):
+                is_rep_command = True
+                break
     
     # Если это НЕ команда репутации - игнорируем
     if not is_rep_command:
@@ -975,16 +978,10 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     # Получаем целевого пользователя из текста
     target_identifier = None
     
-    # ПАТТЕРНЫ ДЛЯ ПОИСКА USERNAME/ID В ЛЮБОМ МЕСТЕ СООБЩЕНИЯ
-    # Теперь ищем username/id в любом месте относительно +rep/-rep
-    # Добавляем возможность нулевого количества пробелов/знаков препинания
+    # Паттерны для поиска username/id в команде репутации (с поддержкой пробелов)
     patterns = [
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',      # @username после +rep (0 или более пробелов/знаков)
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',         # ID после +rep (0 или более пробелов/знаков)
-        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',          # @username до +rep (0 или более пробелов/знаков)
-        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',           # ID до +rep (0 или более пробелов/знаков)
-        r'(@\w+)\+ *(?:rep|реп)\b',                      # @username+rep слитно с плюсом
-        r'(@\w+)- *(?:rep|реп)\b',                       # @username-rep слитно с минусом
+        r'[-+]\s*(?:rep|реп)\s+(@?\w+)',
+        r'[-+]\s*(?:rep|реп)\s+(\d+)',
     ]
     
     for pattern in patterns:
@@ -994,44 +991,39 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             break
     
     if not target_identifier:
-        # Проверяем реплай
-        if update.message.reply_to_message:
-            target_user = update.message.reply_to_message.from_user
-            target_info = {"id": target_user.id, "username": target_user.username or f"id{target_user.id}"}
-        else:
-            await update.message.reply_text("❌ <b>Не найден username/id в сообщении</b>", parse_mode='HTML')
-            return
-    else:
-        target_info = {"id": None, "username": None}
-        
-        if target_identifier.isdigit():
-            target_info["id"] = int(target_identifier)
-            target_info["username"] = f"id{target_identifier}"
-        else:
-            username = target_identifier.lstrip('@')
-            user_info = get_user_by_username(username)
-            
-            if user_info:
-                target_info["id"] = user_info['user_id']
-                target_info["username"] = user_info['username']
-            else:
-                # Если username не найден в базе, но мы всё равно можем попробовать сохранить
-                # Создаём временную запись
-                target_info["username"] = username
-                # Нужно получить реальный ID пользователя
-                # Для этого можно попробовать получить из контекста или оставить как None
-                await update.message.reply_text("❌ <b>Пользователь не найден в базе</b>\nОн должен сначала написать боту", parse_mode='HTML')
-                return
-    
-    if target_info["id"] == user_id:
-        await update.message.reply_text("❌ Нельзя отправлять репутацию себе!")
+        await update.message.reply_text("Неверный формат")
         return
     
-    # Сохраняем репутацию
+    target_info = {"id": None, "username": None}
+    
+    if target_identifier.isdigit():
+        target_info["id"] = int(target_identifier)
+        target_info["username"] = f"id{target_identifier}"
+    
+    elif update.message.reply_to_message:
+        target_info["id"] = update.message.reply_to_message.from_user.id
+        target_username = update.message.reply_to_message.from_user.username
+        target_info["username"] = target_username or f"id{target_info['id']}"
+        
+    else:
+        username = target_identifier.lstrip('@')
+        user_info = get_user_by_username(username)
+        
+        if user_info:
+            target_info["id"] = user_info['user_id']
+            target_info["username"] = user_info['username']
+        else:
+            await update.message.reply_text("❌ <b>Пользователь не найден</b>\nИспользуйте реплай или ID", parse_mode='HTML')
+            return
+    
+    if target_info["id"] == user_id:
+        await update.message.reply_text("Нельзя себе")
+        return
+    
     save_reputation(
         from_user=user_id,
         from_username=update.effective_user.username or "",
-        to_user=target_info["id"] or 0,  # Временный ID если не найден
+        to_user=target_info["id"],
         to_username=target_info["username"],
         text=text,
         photo_id=update.message.photo[-1].file_id
@@ -1053,16 +1045,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         await update.message.reply_text("❌ <b>Добавьте текст к фото!</b>\n\nПример: +rep @username сделка прошла успешно", parse_mode='HTML')
         return
     
-    # ИЩЕМ +rep ИЛИ -rep В ЛЮБОМ МЕСТЕ С ИГНОРИРОВАНИЕМ РЕГИСТРА
-    patterns = [
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',
-        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
-        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
-        r'(@\w+)\+ *(?:rep|реп)\b',
-        r'(@\w+)- *(?:rep|реп)\b',
-    ]
-    
+    patterns = [r'[-+]\s*(?:rep|реп)\s+(@?\w+)']
     target_identifier = None
     
     for pattern in patterns:
@@ -1087,7 +1070,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
             target_info["id"] = user_info['user_id']
             target_info["username"] = user_info['username']
         else:
-            await update.message.reply_text("❌ <b>Пользователь не найден</b>\nОн должен сначала написать боту", parse_mode='HTML')
+            await update.message.reply_text("❌ <b>Пользователь не найден</b>", parse_mode='HTML')
             return
     
     if target_info["id"] == user_id:
