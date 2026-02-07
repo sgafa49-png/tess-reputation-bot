@@ -1058,10 +1058,10 @@ def main():
     print("=" * 60)
     
     # Запускаем бота с сбросом старых обновлений
+    # Запускаем бота с сбросом старых обновлений
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-        poll_timeout=30
+        drop_pending_updates=True
     )
 
 if __name__ == '__main__':
