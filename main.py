@@ -792,16 +792,18 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     if not update.message:
         return
     
-    user_id = update.effective_user.id
-    username = update.effective_user.username or f"id{user_id}"
+    # Сохраняем всех пользователей
+    if update.message.from_user:
+        save_user(update.message.from_user.id, update.message.from_user.username or "")
     
-    # Сохраняем отправителя
-    save_user(user_id, username)
-    
-    # Сохраняем пользователя из реплая (если есть и он валидный)
+    # Сохраняем пользователя из реплая
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         reply_user = update.message.reply_to_message.from_user
-        save_user(reply_user.id, reply_user.username or f"id{reply_user.id}")
+        save_user(reply_user.id, reply_user.username or "")
+    
+    # Сохраняем оригинального отправителя пересланного сообщения
+    if update.message.forward_from:
+        save_user(update.message.forward_from.id, update.message.forward_from.username or "")
     
     if update.message.chat.type == 'private':
         if context.user_data.get('waiting_for_search'):
@@ -814,17 +816,36 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
 
 async def handle_group_reputation(update: Update, context: CallbackContext) -> None:
     """Обработка репутации в групповом чате"""
-    user_id = update.effective_user.id
-    username = update.effective_user.username or f"id{user_id}"
+    
+    # Определяем, кто реальный отправитель
+    if update.message.forward_from:
+        # Сообщение переслано от другого пользователя
+        original_user = update.message.forward_from
+        is_forwarded = True
+        print(f"🔍 Сообщение ПЕРЕСЛАНО от: {original_user.username or original_user.id}")
+    elif update.message.forward_sender_name:
+        # Переслано от пользователя, скрывшего свой профиль
+        print(f"🔍 Сообщение переслано от скрытого пользователя: {update.message.forward_sender_name}")
+        await update.message.reply_text("❌ <b>Нельзя использовать пересланные сообщения от скрытых пользователей</b>", parse_mode='HTML')
+        return
+    else:
+        # Обычное сообщение
+        original_user = update.message.from_user
+        is_forwarded = False
+    
+    user_id = original_user.id
+    username = original_user.username or f"id{user_id}"
     text = update.message.text or update.message.caption or ""
     
     # ОТЛАДКА
     print(f"\n{'='*60}")
     print(f"🔍 ПОЛУЧЕНО СООБЩЕНИЕ В ГРУППЕ")
-    print(f"👤 От: {username} (ID: {user_id})")
+    print(f"👤 Оригинальный отправитель: {username} (ID: {user_id})")
+    if is_forwarded:
+        print(f"📤 Переслано пользователем: {update.message.from_user.username or update.message.from_user.id}")
+    print(f"🔁 Переслано: {'Да' if is_forwarded else 'Нет'}")
     print(f"💬 Текст: '{text}'")
     print(f"📷 Есть фото: {bool(update.message.photo)}")
-    print(f"💬 Тип чата: {update.message.chat.type}")
     print(f"{'='*60}")
     
     # Проверяем, является ли это командой репутации
@@ -847,11 +868,8 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     # Улучшенные паттерны поиска пользователя
     patterns = [
-        # +rep @username или -rep @username
         r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*@?([a-zA-Z0-9_]+)',
-        # +rep 123456 или -rep 123456
         r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*(\d+)',
-        # @username +rep или 123456 +rep
         r'@?([a-zA-Z0-9_]+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
         r'(\d+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
     ]
@@ -894,16 +912,23 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     print(f"🎯 Целевой пользователь: {target_info['username']} (ID: {target_info['id']})")
     
-    if target_info["id"] == user_id:
+    # Проверяем, не пытается ли пользователь отправить репутацию самому себе
+    if target_info["id"] == original_user.id:
         print(f"❌ Попытка отправить репутацию себе")
         await update.message.reply_text("❌ <b>Нельзя отправлять репутацию самому себе</b>", parse_mode='HTML')
+        return
+    
+    # Запрещаем пересылать чужие сообщения для накрутки
+    if is_forwarded and update.message.from_user.id != original_user.id:
+        print(f"⚠️ Пользователь {update.message.from_user.id} пытается переслать чужую репутацию")
+        await update.message.reply_text("❌ <b>Нельзя пересылать чужие сообщения с репутацией</b>", parse_mode='HTML')
         return
     
     print(f"💾 Сохраняем репутацию...")
     
     save_reputation(
-        from_user=user_id,
-        from_username=update.effective_user.username or "",
+        from_user=original_user.id,
+        from_username=original_user.username or "",
         to_user=target_info["id"],
         to_username=target_info["username"],
         text=text,
@@ -911,6 +936,8 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     )
     
     print(f"✅ Репутация успешно сохранена!")
+    
+    # Отвечаем тому, кто отправил сообщение в чат
     await update.message.reply_text("✅ <b>Репутация сохранена</b>", parse_mode='HTML')
 
 async def handle_reputation_message_pm(update: Update, context: CallbackContext) -> None:
