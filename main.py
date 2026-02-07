@@ -384,7 +384,10 @@ async def start(update: Update, context: CallbackContext) -> None:
     if context.args and context.args[0].startswith('view_'):
         try:
             target_user_id = int(context.args[0].replace('view_', ''))
+            # Сохраняем найденного пользователя для работы кнопки "Назад"
             context.user_data['found_user_id'] = target_user_id
+            context.user_data['from_group'] = True  # Флаг что пришли из группы
+            
             await show_profile_with_working_buttons(update, target_user_id, context)
             return
         except:
@@ -463,7 +466,7 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 # ========== ОБНОВЛЕННЫЕ ФУНКЦИИ ДЛЯ ПРОСМОТРА СКРИНОВ ==========
-async def show_reputation_photo(update: Update, rep_id: int, back_context: str) -> None:
+async def show_reputation_photo(update: Update, rep_id: int, back_context: str, context: CallbackContext) -> None:
     """Показать фото отзыва с информацией (редактируем текущее сообщение)"""
     query = update.callback_query
     await query.answer()
@@ -472,6 +475,14 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str) 
     if not rep_data:
         await query.answer("Отзыв не найден", show_alert=True)
         return
+    
+    # Определяем правильный back_context для кнопки "Назад"
+    target_user_id = rep_data['to_user']
+    current_user_id = query.from_user.id
+    
+    # Если пришли из группы и смотрим не свои отзывы
+    if context.user_data.get('from_group') and target_user_id != current_user_id:
+        back_context = 'back_from_group_view'
     
     # Форматируем подпись
     rep_type = get_reputation_type(rep_data["text"])
@@ -527,7 +538,7 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str) 
                 print(f"❌ Ошибка редактирования текста: {e3}")
 
 async def show_my_reputation_menu(query, rep_type='all'):
-    """Показать меню репутации с кнопками для просмотра фото"""
+    """Показать меню репутации с кнопками для просмотра фото (с фото)"""
     user_id = query.from_user.id
     stats = get_reputation_stats(user_id)
     
@@ -546,21 +557,18 @@ async def show_my_reputation_menu(query, rep_type='all'):
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
         
-        # Проверяем, есть ли фото в сообщении
-        if query.message.photo:
-            try:
-                await query.edit_message_caption(
+        try:
+            # Всегда показываем фото
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=PHOTO_URL,
                     caption=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='HTML'
-                )
-            except:
-                await query.edit_message_text(
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='HTML'
-                )
-        else:
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            print(f"❌ Ошибка редактирования фото: {e}")
             await query.edit_message_text(
                 text=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -601,21 +609,18 @@ async def show_my_reputation_menu(query, rep_type='all'):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Проверяем, есть ли фото в сообщении
-    if query.message.photo:
-        try:
-            await query.edit_message_caption(
+    try:
+        # Всегда показываем фото
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=PHOTO_URL,
                 caption=text,
-                reply_markup=reply_markup,
                 parse_mode='HTML'
-            )
-        except:
-            await query.edit_message_text(
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-    else:
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"❌ Ошибка редактирования фото: {e}")
         await query.edit_message_text(
             text=text,
             reply_markup=reply_markup,
@@ -623,7 +628,7 @@ async def show_my_reputation_menu(query, rep_type='all'):
         )
 
 async def show_found_user_reputation_menu(query, target_user_id, rep_type='all'):
-    """Показать меню репутации найденного пользователя"""
+    """Показать меню репутации найденного пользователя (с фото)"""
     user_info = get_user_info(target_user_id)
     username = user_info.get("username", "") if user_info else f"id{target_user_id}"
     
@@ -644,20 +649,17 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='view_found_user_reputation')]]
         
-        if query.message.photo:
-            try:
-                await query.edit_message_caption(
+        try:
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=PHOTO_URL,
                     caption=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='HTML'
-                )
-            except:
-                await query.edit_message_text(
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='HTML'
-                )
-        else:
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            print(f"❌ Ошибка редактирования фото: {e}")
             await query.edit_message_text(
                 text=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -698,20 +700,17 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if query.message.photo:
-        try:
-            await query.edit_message_caption(
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=PHOTO_URL,
                 caption=text,
-                reply_markup=reply_markup,
                 parse_mode='HTML'
-            )
-        except:
-            await query.edit_message_text(
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-    else:
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"❌ Ошибка редактирования фото: {e}")
         await query.edit_message_text(
             text=text,
             reply_markup=reply_markup,
@@ -731,7 +730,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             rep_type = parts[3]
             # Для своих отзывов возвращаемся к соответствующему списку
             back_context = f"back_to_list_{rep_type}"
-            await show_reputation_photo(update, rep_id, back_context)
+            await show_reputation_photo(update, rep_id, back_context, context)
         return
     
     # Обработка возврата к списку (свои отзывы)
@@ -740,15 +739,28 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await show_my_reputation_menu(query, rep_type)
         return
     
+    # Обработка возврата из просмотра фото (пришли из группы)
+    if query.data == 'back_from_group_view':
+        target_user_id = context.user_data.get('found_user_id')
+        if target_user_id:
+            await show_reputation_selection_menu(query, is_own=False, target_user_id=target_user_id)
+        else:
+            await show_main_menu(query)
+        return
+    
     # Обработка просмотра фото для найденных пользователей
     if query.data.startswith('found_view_photo_'):
         parts = query.data.split('_')
         if len(parts) >= 5:
             rep_id = int(parts[3])
             rep_type = parts[4]
-            # Для найденных пользователей сохраняем user_id в callback
-            back_context = f"found_back_to_list_{rep_type}_{context.user_data.get('found_user_id', 0)}"
-            await show_reputation_photo(update, rep_id, back_context)
+            # Определяем back_context в зависимости от контекста
+            if context.user_data.get('from_group'):
+                back_context = 'back_from_group_view'
+            else:
+                back_context = f"found_back_to_list_{rep_type}_{context.user_data.get('found_user_id', 0)}"
+            
+            await show_reputation_photo(update, rep_id, back_context, context)
         return
     
     # Обработка возврата к списку для найденных пользователей
@@ -775,13 +787,19 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        if query.message.photo:
-            try:
-                await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-            except:
-                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-        else:
+        try:
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=PHOTO_URL,
+                    caption=text,
+                    parse_mode='HTML'
+                ),
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print(f"❌ Ошибка редактирования фото: {e}")
             await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+        
         context.user_data['waiting_for_rep'] = True
     
     elif query.data == 'search_user':
@@ -790,13 +808,19 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        if query.message.photo:
-            try:
-                await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-            except:
-                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-        else:
+        try:
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=PHOTO_URL,
+                    caption=text,
+                    parse_mode='HTML'
+                ),
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print(f"❌ Ошибка редактирования фото: {e}")
             await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+        
         context.user_data['waiting_for_search'] = True
     
     elif query.data == 'profile':
@@ -855,7 +879,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await handle_old_button_logic(query, context)
 
 async def show_reputation_selection_menu(query, is_own=True, target_user_id=None):
-    """Меню выбора типа репутации"""
+    """Меню выбора типа репутации (с фото)"""
     text = "<b>Выберите раздел:</b>"
     
     if is_own:
@@ -877,16 +901,21 @@ async def show_reputation_selection_menu(query, is_own=True, target_user_id=None
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if query.message.photo:
-        try:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-        except:
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=PHOTO_URL,
+                caption=text,
+                parse_mode='HTML'
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"❌ Ошибка редактирования фото: {e}")
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_last_reputation(query, is_positive=True, is_own=True):
-    """Обработка последнего отзыва"""
+    """Обработка последнего отзыва (с фото)"""
     user_id = query.from_user.id if is_own else query.message.chat.id
     
     if is_positive:
@@ -900,12 +929,17 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
         
-        if query.message.photo:
-            try:
-                await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-            except:
-                await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
-        else:
+        try:
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=PHOTO_URL,
+                    caption=text,
+                    parse_mode='HTML'
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            print(f"❌ Ошибка редактирования фото: {e}")
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         return
     
@@ -933,12 +967,17 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if query.message.photo:
-        try:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-        except:
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=PHOTO_URL,
+                caption=text,
+                parse_mode='HTML'
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"❌ Ошибка редактирования фото: {e}")
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_old_button_logic(query, context):
@@ -946,7 +985,7 @@ async def handle_old_button_logic(query, context):
     # ... существующий код обработки остальных кнопок ...
 
 async def show_profile_pm(query, user_id, is_own_profile=True):
-    """Показать профиль в личных сообщениях"""
+    """Показать профиль в личных сообщениях (с фото)"""
     user_info = get_user_info(user_id)
     stats = get_reputation_stats(user_id)
     
@@ -986,12 +1025,17 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if query.message.photo:
-        try:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-        except:
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=PHOTO_URL,
+                caption=text,
+                parse_mode='HTML'
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"❌ Ошибка редактирования фото: {e}")
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_main_menu(query):
@@ -1010,32 +1054,17 @@ ID - [{user_id}]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if query.message.photo:
-        try:
-            # Если есть фото, редактируем его
-            await query.edit_message_media(
-                media=InputMediaPhoto(
-                    media=PHOTO_URL,
-                    caption=text,
-                    parse_mode='HTML'
-                ),
-                reply_markup=reply_markup
-            )
-        except Exception as e:
-            print(f"❌ Ошибка редактирования фото: {e}")
-            # Если не удалось, пробуем редактировать текст
-            try:
-                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-            except:
-                # Если и это не удалось, отправляем новое сообщение
-                await query.message.delete()
-                await query.message.chat.send_photo(
-                    photo=PHOTO_URL,
-                    caption=text,
-                    reply_markup=reply_markup,
-                    parse_mode='HTML'
-                )
-    else:
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=PHOTO_URL,
+                caption=text,
+                parse_mode='HTML'
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"❌ Ошибка редактирования фото: {e}")
         try:
             await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         except:
