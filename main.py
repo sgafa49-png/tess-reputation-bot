@@ -462,15 +462,15 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
         print(f"❌ Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
-# ========== НОВЫЕ ФУНКЦИИ ДЛЯ ПРОСМОТРА СКРИНОВ ==========
-async def show_reputation_photo(update: Update, rep_id: int, back_callback: str) -> None:
-    """Показать фото отзыва с информацией"""
+# ========== ОБНОВЛЕННЫЕ ФУНКЦИИ ДЛЯ ПРОСМОТРА СКРИНОВ ==========
+async def show_reputation_photo(update: Update, rep_id: int, back_context: str) -> None:
+    """Показать фото отзыва с информацией (редактируем текущее сообщение)"""
     query = update.callback_query
     await query.answer()
     
     rep_data = get_reputation_by_id(rep_id)
     if not rep_data:
-        await query.message.reply_text("❌ Отзыв не найден")
+        await query.answer("Отзыв не найден", show_alert=True)
         return
     
     # Форматируем подпись
@@ -492,24 +492,31 @@ async def show_reputation_photo(update: Update, rep_id: int, back_callback: str)
 {rep_data['text']}"""
     
     keyboard = [
-        [InlineKeyboardButton("↩️ Назад к списку", callback_data=back_callback)]
+        [InlineKeyboardButton("↩️ Назад к списку", callback_data=back_context)]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # Редактируем текущее сообщение, заменяя фото
     try:
-        await query.message.reply_photo(
-            photo=rep_data['photo_id'],
-            caption=caption,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
+        await query.edit_message_media(
+            media=telegram.InputMediaPhoto(
+                media=rep_data['photo_id'],
+                caption=caption,
+                parse_mode='HTML'
+            ),
+            reply_markup=reply_markup
         )
     except Exception as e:
-        print(f"❌ Ошибка отправки фото: {e}")
-        await query.message.reply_text(
-            f"{caption}\n\n⚠️ Фото не загружено",
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        print(f"❌ Ошибка редактирования фото: {e}")
+        # Если не удалось отредактировать фото, пробуем отредактировать текст
+        try:
+            await query.edit_message_text(
+                text=f"{caption}\n\n⚠️ Фото недоступно",
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        except Exception as e2:
+            print(f"❌ Ошибка редактирования текста: {e2}")
 
 async def show_my_reputation_menu(query, rep_type='all'):
     """Показать меню репутации с кнопками для просмотра фото"""
@@ -527,16 +534,30 @@ async def show_my_reputation_menu(query, rep_type='all'):
         filtered_reps = stats['all_reps']
         title = "🪄 Все отзывы"
     
-    has_photo = query.message.photo is not None
-    
     if not filtered_reps:
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
         
-        if has_photo:
-            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        # Проверяем, есть ли фото в сообщении
+        if query.message.photo:
+            try:
+                await query.edit_message_caption(
+                    caption=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+            except:
+                await query.edit_message_text(
+                    text=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
         else:
-            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+            await query.edit_message_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
         return
     
     # Формируем текст и кнопки
@@ -561,7 +582,7 @@ async def show_my_reputation_menu(query, rep_type='all'):
         # Добавляем кнопку для просмотра скрина
         keyboard.append([InlineKeyboardButton(
             f"{emoji} {i}. {from_user} - 📅 {date}", 
-            callback_data=f"view_photo_{rep['id']}"
+            callback_data=f"view_photo_{rep['id']}_{rep_type}"
         )])
     
     if len(filtered_reps) > 10:
@@ -572,10 +593,26 @@ async def show_my_reputation_menu(query, rep_type='all'):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    # Проверяем, есть ли фото в сообщении
+    if query.message.photo:
+        try:
+            await query.edit_message_caption(
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        except:
+            await query.edit_message_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
     else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+        await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
 
 async def show_found_user_reputation_menu(query, target_user_id, rep_type='all'):
     """Показать меню репутации найденного пользователя"""
@@ -595,16 +632,29 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
         filtered_reps = stats['all_reps']
         title = f"🪄 Все отзывы @{username}"
     
-    has_photo = query.message.photo is not None
-    
     if not filtered_reps:
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='view_found_user_reputation')]]
         
-        if has_photo:
-            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        if query.message.photo:
+            try:
+                await query.edit_message_caption(
+                    caption=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+            except:
+                await query.edit_message_text(
+                    text=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
         else:
-            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+            await query.edit_message_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
         return
     
     # Формируем текст и кнопки
@@ -629,7 +679,7 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
         # Добавляем кнопку для просмотра скрина
         keyboard.append([InlineKeyboardButton(
             f"{emoji} {i}. {from_user} - 📅 {date}", 
-            callback_data=f"found_view_photo_{rep['id']}"
+            callback_data=f"found_view_photo_{rep['id']}_{rep_type}"
         )])
     
     if len(filtered_reps) > 10:
@@ -640,28 +690,63 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    if query.message.photo:
+        try:
+            await query.edit_message_caption(
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        except:
+            await query.edit_message_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
     else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+        await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
 
 async def button_handler(update: Update, context: CallbackContext) -> None:
     """Обработчик кнопок"""
     query = update.callback_query
     await query.answer()
     
-    has_photo = query.message.photo is not None
-    
     # Обработка просмотра фото для своих отзывов
     if query.data.startswith('view_photo_'):
-        rep_id = int(query.data.replace('view_photo_', ''))
-        await show_reputation_photo(update, rep_id, 'my_reputation')
+        parts = query.data.split('_')
+        if len(parts) >= 4:
+            rep_id = int(parts[2])
+            rep_type = parts[3]
+            back_context = f"back_to_list_{rep_type}"
+            await show_reputation_photo(update, rep_id, back_context)
+        return
+    
+    # Обработка возврата к списку
+    if query.data.startswith('back_to_list_'):
+        rep_type = query.data.replace('back_to_list_', '')
+        await show_my_reputation_menu(query, rep_type)
         return
     
     # Обработка просмотра фото для найденных пользователей
     if query.data.startswith('found_view_photo_'):
-        rep_id = int(query.data.replace('found_view_photo_', ''))
-        await show_reputation_photo(update, rep_id, 'view_found_user_reputation')
+        parts = query.data.split('_')
+        if len(parts) >= 5:
+            rep_id = int(parts[3])
+            rep_type = parts[4]
+            back_context = f"found_back_to_list_{rep_type}"
+            await show_reputation_photo(update, rep_id, back_context)
+        return
+    
+    # Обработка возврата к списку для найденных пользователей
+    if query.data.startswith('found_back_to_list_'):
+        rep_type = query.data.replace('found_back_to_list_', '')
+        target_user_id = context.user_data.get('found_user_id')
+        if target_user_id:
+            await show_found_user_reputation_menu(query, target_user_id, rep_type)
         return
     
     if query.data == 'send_reputation':
@@ -676,8 +761,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        if has_photo:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        if query.message.photo:
+            try:
+                await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+            except:
+                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         else:
             await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         context.user_data['waiting_for_rep'] = True
@@ -688,8 +776,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        if has_photo:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        if query.message.photo:
+            try:
+                await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+            except:
+                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         else:
             await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         context.user_data['waiting_for_search'] = True
@@ -753,8 +844,6 @@ async def show_reputation_selection_menu(query, is_own=True, target_user_id=None
     """Меню выбора типа репутации"""
     text = "<b>Выберите раздел:</b>"
     
-    has_photo = query.message.photo is not None
-    
     if is_own:
         keyboard = [
             [InlineKeyboardButton("🪄 Положительные", callback_data='show_positive')],
@@ -774,8 +863,11 @@ async def show_reputation_selection_menu(query, is_own=True, target_user_id=None
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    if query.message.photo:
+        try:
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        except:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
@@ -790,14 +882,15 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
         rep_data = get_last_negative(user_id)
         title = "🪄 Последний отрицательный отзыв"
     
-    has_photo = query.message.photo is not None
-    
     if not rep_data:
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
         
-        if has_photo:
-            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        if query.message.photo:
+            try:
+                await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+            except:
+                await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         else:
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         return
@@ -818,15 +911,19 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
     
     # Добавляем кнопку для просмотра скрина
     callback_type = 'view_photo_' if is_own else 'found_view_photo_'
+    rep_type_str = 'positive' if is_positive else 'negative'
     keyboard = [
-        [InlineKeyboardButton("🪄 Посмотреть скрин", callback_data=f"{callback_type}{rep_data['id']}")],
+        [InlineKeyboardButton("🪄 Посмотреть скрин", callback_data=f"{callback_type}{rep_data['id']}_{rep_type_str}")],
         [InlineKeyboardButton("↩️ Назад", callback_data='my_reputation' if is_own else 'view_found_user_reputation')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    if query.message.photo:
+        try:
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        except:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
@@ -861,8 +958,6 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
 
 🗓️ Зарегистрирован: {registration_date}"""
     
-    has_photo = query.message.photo is not None
-    
     if is_own_profile:
         keyboard = [
             [InlineKeyboardButton("🏆 Моя репутация", callback_data='my_reputation')],
@@ -877,8 +972,11 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    if query.message.photo:
+        try:
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+        except:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
@@ -898,12 +996,37 @@ ID - [{user_id}]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    has_photo = query.message.photo is not None
-    
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    if query.message.photo:
+        try:
+            # Если есть фото, редактируем его
+            from telegram import InputMediaPhoto
+            
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=PHOTO_URL,
+                    caption=text,
+                    parse_mode='HTML'
+                ),
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print(f"❌ Ошибка редактирования фото: {e}")
+            # Если не удалось, пробуем редактировать текст
+            try:
+                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+            except:
+                # Если и это не удалось, отправляем новое сообщение
+                await query.message.delete()
+                await query.message.chat.send_photo(
+                    photo=PHOTO_URL,
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
     else:
         try:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+        except:
             await query.message.delete()
             await query.message.chat.send_photo(
                 photo=PHOTO_URL,
@@ -911,9 +1034,6 @@ ID - [{user_id}]
                 reply_markup=reply_markup,
                 parse_mode='HTML'
             )
-        except Exception as e:
-            print(f"❌ Ошибка отправки фото: {e}")
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     """Обработка ВСЕХ сообщений"""
