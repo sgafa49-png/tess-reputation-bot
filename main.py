@@ -26,6 +26,29 @@ if not DATABASE_URL:
 
 PHOTO_URL = "https://raw.githubusercontent.com/sgafa49-png/tess-reputation-bot/main/IMG_0354.jpeg"
 
+# ========== КОНСТАНТЫ ДЛЯ РЕПУТАЦИИ ==========
+REP_PATTERN = re.compile(r'[+-][\s:;-]*(?:rep|реп|рп)(?:\s|$|[^a-za-zа-я0-9])', re.IGNORECASE)
+
+def is_reputation_command(text):
+    """Определяет, является ли сообщение командой репутации"""
+    return bool(REP_PATTERN.search(text)) if text else False
+
+def get_reputation_type(text):
+    """Определяет тип репутации: + (positive) или - (negative)"""
+    if not text:
+        return None
+    
+    text_lower = text.lower()
+    match = REP_PATTERN.search(text_lower)
+    if match:
+        # Получаем символ в начале совпадения
+        start_pos = match.start()
+        if start_pos < len(text_lower):
+            char = text_lower[start_pos]
+            if char in '+-':
+                return '+' if char == '+' else '-'
+    return None
+
 # ========== БАЗА ДАННЫХ POSTGRESQL ==========
 def get_db_connection():
     """Возвращает соединение с PostgreSQL"""
@@ -198,10 +221,10 @@ def get_reputation_stats(user_id):
     negative = 0
     
     for rep in all_reps:
-        text_lower = rep["text"].lower()
-        if re.search(r'\b[+]\s*(?:rep|реп)\b', text_lower, re.IGNORECASE):
+        rep_type = get_reputation_type(rep["text"])
+        if rep_type == '+':
             positive += 1
-        elif re.search(r'\b[-]\s*(?:rep|реп)\b', text_lower, re.IGNORECASE):
+        elif rep_type == '-':
             negative += 1
     
     total = positive + negative
@@ -221,7 +244,7 @@ def get_last_positive(user_id):
     """Получить последний положительный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE):
+        if get_reputation_type(rep["text"]) == '+':
             return rep
     return None
 
@@ -229,7 +252,7 @@ def get_last_negative(user_id):
     """Получить последний отрицательный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'\b[-]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE):
+        if get_reputation_type(rep["text"]) == '-':
             return rep
     return None
 
@@ -567,8 +590,7 @@ async def handle_show_reputation(query):
     has_photo = query.message.photo is not None
     
     if query.data == 'show_positive':
-        positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+        positive_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
         
         if not positive_reps:
             text = "🪄<b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
@@ -585,8 +607,7 @@ async def handle_show_reputation(query):
         back_button = 'my_reputation'
     
     elif query.data == 'show_negative':
-        negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+        negative_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
         
         if not negative_reps:
             text = "🪄<b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
@@ -612,7 +633,8 @@ async def handle_show_reputation(query):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE) else "❌"
+                rep_type = get_reputation_type(rep["text"])
+                sign = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "❓"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -673,8 +695,7 @@ async def handle_found_user_reputation(query, context):
     has_photo = query.message.photo is not None
     
     if query.data == 'found_show_positive':
-        positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+        positive_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
         
         if not positive_reps:
             text = f"🪄<b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
@@ -691,8 +712,7 @@ async def handle_found_user_reputation(query, context):
         back_button = 'view_found_user_reputation'
     
     elif query.data == 'found_show_negative':
-        negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
+        negative_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
         
         if not negative_reps:
             text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
@@ -718,7 +738,8 @@ async def handle_found_user_reputation(query, context):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE) else "❌"
+                rep_type = get_reputation_type(rep["text"])
+                sign = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "❓"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -792,7 +813,7 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
         await handle_group_reputation(update, context)
 
 async def handle_group_reputation(update: Update, context: CallbackContext) -> None:
-    """Обработка репутации в групповом чате - С ОТЛАДКОЙ"""
+    """Обработка репутации в групповом чате"""
     user_id = update.effective_user.id
     username = update.effective_user.username or f"id{user_id}"
     text = update.message.text or update.message.caption or ""
@@ -801,13 +822,13 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     print(f"\n{'='*60}")
     print(f"🔍 ПОЛУЧЕНО СООБЩЕНИЕ В ГРУППЕ")
     print(f"👤 От: {username} (ID: {user_id})")
-    print(f"💬 Текст: {text}")
+    print(f"💬 Текст: '{text}'")
     print(f"📷 Есть фото: {bool(update.message.photo)}")
     print(f"💬 Тип чата: {update.message.chat.type}")
     print(f"{'='*60}")
     
     # Проверяем, является ли это командой репутации
-    is_rep_command = bool(re.search(r'\b[+-]\s*(?:rep|реп)\b', text, re.IGNORECASE))
+    is_rep_command = is_reputation_command(text)
     
     print(f"🔍 Поиск +rep/-rep: {'НАЙДЕНО' if is_rep_command else 'НЕ НАЙДЕНО'}")
     
@@ -824,11 +845,15 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     target_identifier = None
     
+    # Улучшенные паттерны поиска пользователя
     patterns = [
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',
-        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
-        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
+        # +rep @username или -rep @username
+        r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*@?([a-zA-Z0-9_]+)',
+        # +rep 123456 или -rep 123456
+        r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*(\d+)',
+        # @username +rep или 123456 +rep
+        r'@?([a-zA-Z0-9_]+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
+        r'(\d+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
     ]
     
     for i, pattern in enumerate(patterns):
@@ -901,11 +926,12 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         await update.message.reply_text("❌ <b>Добавьте текст к фото!</b>\n\nПример: +rep @username сделка прошла успешно", parse_mode='HTML')
         return
     
+    # Улучшенные паттерны поиска
     patterns = [
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',
-        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
-        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
+        r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*@?([a-zA-Z0-9_]+)',
+        r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*(\d+)',
+        r'@?([a-zA-Z0-9_]+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
+        r'(\d+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
     ]
     
     target_identifier = None
@@ -1057,7 +1083,6 @@ def main():
     print("🚀 Бот запускается...")
     print("=" * 60)
     
-    # Запускаем бота с сбросом старых обновлений
     # Запускаем бота с сбросом старых обновлений
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
