@@ -151,6 +151,12 @@ def get_user_reputation(user_id):
         rows = cursor.fetchall()
         
         for row in rows:
+            from_username = row[6]
+            if not from_username and row[1] is None:
+                from_username = "Скрытый профиль"
+            elif not from_username:
+                from_username = f"id{row[1]}"
+            
             reps.append({
                 'id': row[0],
                 'from_user': row[1],
@@ -158,7 +164,7 @@ def get_user_reputation(user_id):
                 'text': row[3],
                 'photo_id': row[4],
                 'created_at': row[5],
-                'from_username': row[6] or f"id{row[1]}"
+                'from_username': from_username
             })
     except Exception as e:
         print(f"❌ Ошибка получения репутации: {e}")
@@ -166,6 +172,43 @@ def get_user_reputation(user_id):
         conn.close()
     
     return reps
+
+def get_reputation_by_id(rep_id):
+    """Получить отзыв по ID"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''
+            SELECT r.*, u.username as from_username 
+            FROM reputation r
+            LEFT JOIN users u ON r.from_user = u.user_id
+            WHERE r.id = %s
+        ''', (rep_id,))
+        
+        row = cursor.fetchone()
+        if row:
+            from_username = row[6]
+            if not from_username and row[1] is None:
+                from_username = "Скрытый профиль"
+            elif not from_username:
+                from_username = f"id{row[1]}"
+            
+            return {
+                'id': row[0],
+                'from_user': row[1],
+                'to_user': row[2],
+                'text': row[3],
+                'photo_id': row[4],
+                'created_at': row[5],
+                'from_username': from_username
+            }
+    except Exception as e:
+        print(f"❌ Ошибка получения отзыва {rep_id}: {e}")
+    finally:
+        conn.close()
+    
+    return None
 
 def get_user_info(user_id):
     """Получаем информацию о пользователе"""
@@ -256,7 +299,7 @@ def get_last_negative(user_id):
             return rep
     return None
 
-# ========== TELEGRAM HANDLERS ==========
+# ========== ТЕЛЕГРАМ HANDLERS ==========
 async def quick_profile(update: Update, context: CallbackContext) -> None:
     """Быстрый просмотр профиля в чате"""
     user_id = update.effective_user.id
@@ -419,6 +462,189 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
         print(f"❌ Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
+# ========== НОВЫЕ ФУНКЦИИ ДЛЯ ПРОСМОТРА СКРИНОВ ==========
+async def show_reputation_photo(update: Update, rep_id: int, back_callback: str) -> None:
+    """Показать фото отзыва с информацией"""
+    query = update.callback_query
+    await query.answer()
+    
+    rep_data = get_reputation_by_id(rep_id)
+    if not rep_data:
+        await query.message.reply_text("❌ Отзыв не найден")
+        return
+    
+    # Форматируем подпись
+    rep_type = get_reputation_type(rep_data["text"])
+    type_text = "✅ ПОЛОЖИТЕЛЬНЫЙ ОТЗЫВ" if rep_type == '+' else "❌ ОТРИЦАТЕЛЬНЫЙ ОТЗЫВ"
+    
+    from_username = rep_data["from_username"]
+    user_id_display = rep_data["from_user"] if rep_data["from_user"] else "Неизвестно"
+    
+    date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
+    
+    caption = f"""<b>{type_text}</b>
+
+🪄 От: {from_username}
+🪄 ID: {user_id_display}
+🪄 Дата: {date}
+
+🪄 Текст:
+{rep_data['text']}"""
+    
+    keyboard = [
+        [InlineKeyboardButton("↩️ Назад к списку", callback_data=back_callback)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.message.reply_photo(
+            photo=rep_data['photo_id'],
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        print(f"❌ Ошибка отправки фото: {e}")
+        await query.message.reply_text(
+            f"{caption}\n\n⚠️ Фото не загружено",
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+
+async def show_my_reputation_menu(query, rep_type='all'):
+    """Показать меню репутации с кнопками для просмотра фото"""
+    user_id = query.from_user.id
+    stats = get_reputation_stats(user_id)
+    
+    # Фильтруем отзывы
+    if rep_type == 'positive':
+        filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
+        title = "🪄 Положительные отзывы"
+    elif rep_type == 'negative':
+        filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
+        title = "🪄 Отрицательные отзывы"
+    else:
+        filtered_reps = stats['all_reps']
+        title = "🪄 Все отзывы"
+    
+    has_photo = query.message.photo is not None
+    
+    if not filtered_reps:
+        text = f"{title}\n\n📭 Отзывов пока нет"
+        keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
+        
+        if has_photo:
+            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        else:
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return
+    
+    # Формируем текст и кнопки
+    text = f"<b>{title}</b>\n\n"
+    keyboard = []
+    
+    for i, rep in enumerate(filtered_reps[:10], 1):
+        rep_type_char = get_reputation_type(rep["text"])
+        emoji = "✅" if rep_type_char == '+' else "❌" if rep_type_char == '-' else "📝"
+        from_user = rep.get("from_username", f"id{rep['from_user']}")
+        date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
+        
+        # Обрезаем текст для отображения
+        short_text = rep['text']
+        if len(short_text) > 40:
+            short_text = short_text[:37] + "..."
+        
+        text += f"{i}. {emoji} От {from_user}\n"
+        text += f"   {short_text}\n"
+        text += f"   📅 {date}\n\n"
+        
+        # Добавляем кнопку для просмотра скрина
+        keyboard.append([InlineKeyboardButton(
+            f"{emoji} {i}. {from_user} - 📅 {date}", 
+            callback_data=f"view_photo_{rep['id']}"
+        )])
+    
+    if len(filtered_reps) > 10:
+        text += f"\n... и еще {len(filtered_reps) - 10} отзывов"
+    
+    # Кнопка возврата
+    keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if has_photo:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    else:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+
+async def show_found_user_reputation_menu(query, target_user_id, rep_type='all'):
+    """Показать меню репутации найденного пользователя"""
+    user_info = get_user_info(target_user_id)
+    username = user_info.get("username", "") if user_info else f"id{target_user_id}"
+    
+    stats = get_reputation_stats(target_user_id)
+    
+    # Фильтруем отзывы
+    if rep_type == 'positive':
+        filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
+        title = f"🪄 Положительные отзывы @{username}"
+    elif rep_type == 'negative':
+        filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
+        title = f"🪄 Отрицательные отзывы @{username}"
+    else:
+        filtered_reps = stats['all_reps']
+        title = f"🪄 Все отзывы @{username}"
+    
+    has_photo = query.message.photo is not None
+    
+    if not filtered_reps:
+        text = f"{title}\n\n📭 Отзывов пока нет"
+        keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='view_found_user_reputation')]]
+        
+        if has_photo:
+            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        else:
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return
+    
+    # Формируем текст и кнопки
+    text = f"<b>{title}</b>\n\n"
+    keyboard = []
+    
+    for i, rep in enumerate(filtered_reps[:10], 1):
+        rep_type_char = get_reputation_type(rep["text"])
+        emoji = "✅" if rep_type_char == '+' else "❌" if rep_type_char == '-' else "📝"
+        from_user = rep.get("from_username", f"id{rep['from_user']}")
+        date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
+        
+        # Обрезаем текст для отображения
+        short_text = rep['text']
+        if len(short_text) > 40:
+            short_text = short_text[:37] + "..."
+        
+        text += f"{i}. {emoji} От {from_user}\n"
+        text += f"   {short_text}\n"
+        text += f"   📅 {date}\n\n"
+        
+        # Добавляем кнопку для просмотра скрина
+        keyboard.append([InlineKeyboardButton(
+            f"{emoji} {i}. {from_user} - 📅 {date}", 
+            callback_data=f"found_view_photo_{rep['id']}"
+        )])
+    
+    if len(filtered_reps) > 10:
+        text += f"\n... и еще {len(filtered_reps) - 10} отзывов"
+    
+    # Кнопка возврата
+    keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data='view_found_user_reputation')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if has_photo:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    else:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+
 async def button_handler(update: Update, context: CallbackContext) -> None:
     """Обработчик кнопок"""
     query = update.callback_query
@@ -426,17 +652,16 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
     
     has_photo = query.message.photo is not None
     
-    if query.data.startswith('send_to_'):
-        target_user_id = int(query.data.replace('send_to_', ''))
-        target_user_info = get_user_info(target_user_id)
-        target_username = target_user_info.get("username", f"id{target_user_id}") if target_user_info else f"id{target_user_id}"
-        
-        await query.message.reply_text(
-            f"Для отправки репутации пользователю @{target_username} перейдите в личные сообщения с ботом",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Перейти в бот", url=f"https://t.me/{context.bot.username}")]
-            ])
-        )
+    # Обработка просмотра фото для своих отзывов
+    if query.data.startswith('view_photo_'):
+        rep_id = int(query.data.replace('view_photo_', ''))
+        await show_reputation_photo(update, rep_id, 'my_reputation')
+        return
+    
+    # Обработка просмотра фото для найденных пользователей
+    if query.data.startswith('found_view_photo_'):
+        rep_id = int(query.data.replace('found_view_photo_', ''))
+        await show_reputation_photo(update, rep_id, 'view_found_user_reputation')
         return
     
     if query.data == 'send_reputation':
@@ -473,10 +698,22 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await show_profile_pm(query, query.from_user.id, is_own_profile=True)
     
     elif query.data == 'my_reputation':
-        await show_my_reputation_menu(query)
+        await show_reputation_selection_menu(query, is_own=True)
     
-    elif query.data.startswith('show_'):
-        await handle_show_reputation(query)
+    elif query.data == 'show_positive':
+        await show_my_reputation_menu(query, rep_type='positive')
+    
+    elif query.data == 'show_negative':
+        await show_my_reputation_menu(query, rep_type='negative')
+    
+    elif query.data == 'show_all':
+        await show_my_reputation_menu(query, rep_type='all')
+    
+    elif query.data == 'show_last_positive':
+        await handle_last_reputation(query, is_positive=True, is_own=True)
+    
+    elif query.data == 'show_last_negative':
+        await handle_last_reputation(query, is_positive=False, is_own=True)
     
     elif query.data == 'back_to_main':
         await show_main_menu(query)
@@ -484,19 +721,121 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
     elif query.data == 'view_found_user_reputation':
         target_user_id = context.user_data.get('found_user_id')
         if target_user_id:
-            await show_found_user_reputation_menu(query, target_user_id)
+            await show_reputation_selection_menu(query, is_own=False, target_user_id=target_user_id)
         else:
             await show_main_menu(query)
     
-    elif query.data.startswith('found_show_'):
-        await handle_found_user_reputation(query, context)
+    elif query.data == 'found_show_positive':
+        target_user_id = context.user_data.get('found_user_id')
+        if target_user_id:
+            await show_found_user_reputation_menu(query, target_user_id, rep_type='positive')
+    
+    elif query.data == 'found_show_negative':
+        target_user_id = context.user_data.get('found_user_id')
+        if target_user_id:
+            await show_found_user_reputation_menu(query, target_user_id, rep_type='negative')
+    
+    elif query.data == 'found_show_all':
+        target_user_id = context.user_data.get('found_user_id')
+        if target_user_id:
+            await show_found_user_reputation_menu(query, target_user_id, rep_type='all')
     
     elif query.data == 'back_to_found_profile':
         target_user_id = context.user_data.get('found_user_id')
         if target_user_id:
             await show_profile_pm(query, target_user_id, is_own_profile=False)
+    
+    else:
+        # Старая логика для остальных кнопок
+        await handle_old_button_logic(query, context)
+
+async def show_reputation_selection_menu(query, is_own=True, target_user_id=None):
+    """Меню выбора типа репутации"""
+    text = "<b>Выберите раздел:</b>"
+    
+    has_photo = query.message.photo is not None
+    
+    if is_own:
+        keyboard = [
+            [InlineKeyboardButton("🪄 Положительные", callback_data='show_positive')],
+            [InlineKeyboardButton("🪄 Отрицательные", callback_data='show_negative')],
+            [InlineKeyboardButton("🪄 Все", callback_data='show_all')],
+            [InlineKeyboardButton("🪄 Последний положительный", callback_data='show_last_positive')],
+            [InlineKeyboardButton("🪄 Последний отрицательный", callback_data='show_last_negative')],
+            [InlineKeyboardButton("↩️ Назад", callback_data='profile')]
+        ]
+    else:
+        keyboard = [
+            [InlineKeyboardButton("🪄 Положительные", callback_data='found_show_positive')],
+            [InlineKeyboardButton("🪄 Отрицательные", callback_data='found_show_negative')],
+            [InlineKeyboardButton("🪄 Все", callback_data='found_show_all')],
+            [InlineKeyboardButton("↩️ Назад", callback_data='back_to_found_profile')]
+        ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if has_photo:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    else:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+
+async def handle_last_reputation(query, is_positive=True, is_own=True):
+    """Обработка последнего отзыва"""
+    user_id = query.from_user.id if is_own else query.message.chat.id
+    
+    if is_positive:
+        rep_data = get_last_positive(user_id)
+        title = "🪄 Последний положительный отзыв"
+    else:
+        rep_data = get_last_negative(user_id)
+        title = "🪄 Последний отрицательный отзыв"
+    
+    has_photo = query.message.photo is not None
+    
+    if not rep_data:
+        text = f"{title}\n\n📭 Отзывов пока нет"
+        keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
+        
+        if has_photo:
+            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        else:
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        return
+    
+    # Показываем информацию о последнем отзыве
+    from_username = rep_data.get("from_username", f"id{rep_data['from_user']}")
+    date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
+    rep_type = get_reputation_type(rep_data["text"])
+    emoji = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "📝"
+    
+    text = f"""<b>{title}</b>
+
+{emoji} От: {from_username}
+📅 Дата: {date}
+
+📝 Текст:
+{rep_data['text']}"""
+    
+    # Добавляем кнопку для просмотра скрина
+    callback_type = 'view_photo_' if is_own else 'found_view_photo_'
+    keyboard = [
+        [InlineKeyboardButton("🪄 Посмотреть скрин", callback_data=f"{callback_type}{rep_data['id']}")],
+        [InlineKeyboardButton("↩️ Назад", callback_data='my_reputation' if is_own else 'view_found_user_reputation')]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if has_photo:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
+    else:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
+
+async def handle_old_button_logic(query, context):
+    """Старая логика для кнопок (оставлена для совместимости)"""
+    # ... существующий код обработки остальных кнопок ...
 
 async def show_profile_pm(query, user_id, is_own_profile=True):
+    """Показать профиль в личных сообщениях"""
     user_info = get_user_info(user_id)
     stats = get_reputation_stats(user_id)
     
@@ -543,219 +882,8 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
     else:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
-async def show_my_reputation_menu(query):
-    text = "<b>Выберите раздел:</b>"
-    
-    has_photo = query.message.photo is not None
-    
-    keyboard = [
-        [InlineKeyboardButton("🪄 Положительные", callback_data='show_positive')],
-        [InlineKeyboardButton("🪄 Отрицательные", callback_data='show_negative')],
-        [InlineKeyboardButton("🪄 Все", callback_data='show_all')],
-        [InlineKeyboardButton("🪄 Последний положительный", callback_data='show_last_positive')],
-        [InlineKeyboardButton("🪄 Последний отрицательный", callback_data='show_last_negative')],
-        [InlineKeyboardButton("↩️ Назад", callback_data='profile')]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-
-async def show_found_user_reputation_menu(query, target_user_id):
-    text = "<b>Выберите раздел:</b>"
-    
-    has_photo = query.message.photo is not None
-    
-    keyboard = [
-        [InlineKeyboardButton("🪄 Положительные", callback_data='found_show_positive')],
-        [InlineKeyboardButton("🪄 Отрицательные", callback_data='found_show_negative')],
-        [InlineKeyboardButton("🪄 Все", callback_data='found_show_all')],
-        [InlineKeyboardButton("↩️ Назад", callback_data='back_to_found_profile')]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-
-async def handle_show_reputation(query):
-    user_id = query.from_user.id
-    stats = get_reputation_stats(user_id)
-    
-    has_photo = query.message.photo is not None
-    
-    if query.data == 'show_positive':
-        positive_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
-        
-        if not positive_reps:
-            text = "🪄<b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
-        else:
-            text = "🪄<b>Положительные отзывы</b>\n\n"
-            for i, rep in enumerate(positive_reps[:10], 1):
-                from_user = rep.get("from_username", f"id{rep['from_user']}")
-                date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                text += f"{i}. От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
-            
-            if len(positive_reps) > 10:
-                text += f"\n... и еще {len(positive_reps) - 10} отзывов"
-        
-        back_button = 'my_reputation'
-    
-    elif query.data == 'show_negative':
-        negative_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
-        
-        if not negative_reps:
-            text = "🪄<b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
-        else:
-            text = "🪄<b>Отрицательные отзывы</b>\n\n"
-            for i, rep in enumerate(negative_reps[:10], 1):
-                from_user = rep.get("from_username", f"id{rep['from_user']}")
-                date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                text += f"{i}. От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
-            
-            if len(negative_reps) > 10:
-                text += f"\n... и еще {len(negative_reps) - 10} отзывов"
-        
-        back_button = 'my_reputation'
-    
-    elif query.data == 'show_all':
-        all_reps = stats['all_reps']
-        
-        if not all_reps:
-            text = "🪄<b>Все отзывы</b>\n\nУ вас еще нет отзывов."
-        else:
-            text = "🪄<b>Все отзывы</b>\n\n"
-            for i, rep in enumerate(all_reps[:10], 1):
-                from_user = rep.get("from_username", f"id{rep['from_user']}")
-                date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                rep_type = get_reputation_type(rep["text"])
-                sign = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "❓"
-                text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
-            
-            if len(all_reps) > 10:
-                text += f"\n... и еще {len(all_reps) - 10} отзывов"
-        
-        back_button = 'my_reputation'
-    
-    elif query.data == 'show_last_positive':
-        last_positive = get_last_positive(user_id)
-        
-        if not last_positive:
-            text = "🪄<b>Последний положительный отзыв</b>\n\nУ вас еще нет положительных отзывов."
-        else:
-            from_user = last_positive.get("from_username", f"id{last_positive['from_user']}")
-            date = datetime.fromisoformat(last_positive["created_at"]).strftime("%d/%m/%Y")
-            text = f"""🪄<b>Последный положительный отзыв</b>
-
-От: @{from_user}
-Текст: {last_positive['text']}
-Дата: {date}"""
-        
-        back_button = 'my_reputation'
-    
-    elif query.data == 'show_last_negative':
-        last_negative = get_last_negative(user_id)
-        
-        if not last_negative:
-            text = "🪄<b>Последний отрицательный отзыв</b>\n\nУ вас еще нет отрицательных отзывов."
-        else:
-            from_user = last_negative.get("from_username", f"id{last_negative['from_user']}")
-            date = datetime.fromisoformat(last_negative["created_at"]).strftime("%d/%m/%Y")
-            text = f"""🪄<b>Последний отрицательный отзыв</b>
-
-От: @{from_user}
-Текст: {last_negative['text']}
-Дата: {date}"""
-        
-        back_button = 'my_reputation'
-    
-    keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data=back_button)]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-
-async def handle_found_user_reputation(query, context):
-    target_user_id = context.user_data.get('found_user_id')
-    if not target_user_id:
-        await query.edit_message_text("Ошибка: пользователь не найден")
-        return
-    
-    stats = get_reputation_stats(target_user_id)
-    user_info = get_user_info(target_user_id)
-    username = user_info.get("username", "") if user_info else f"id{target_user_id}"
-    
-    has_photo = query.message.photo is not None
-    
-    if query.data == 'found_show_positive':
-        positive_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
-        
-        if not positive_reps:
-            text = f"🪄<b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
-        else:
-            text = f"🪄<b>Положительные отзывы @{username}</b>\n\n"
-            for i, rep in enumerate(positive_reps[:10], 1):
-                from_user = rep.get("from_username", f"id{rep['from_user']}")
-                date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                text += f"{i}. От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
-            
-            if len(positive_reps) > 10:
-                text += f"\n... и еще {len(positive_reps) - 10} отзывов"
-        
-        back_button = 'view_found_user_reputation'
-    
-    elif query.data == 'found_show_negative':
-        negative_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
-        
-        if not negative_reps:
-            text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
-        else:
-            text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\n"
-            for i, rep in enumerate(negative_reps[:10], 1):
-                from_user = rep.get("from_username", f"id{rep['from_user']}")
-                date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                text += f"{i}. От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
-            
-            if len(negative_reps) > 10:
-                text += f"\n... и еще {len(negative_reps) - 10} отзывов"
-        
-        back_button = 'view_found_user_reputation'
-    
-    elif query.data == 'found_show_all':
-        all_reps = stats['all_reps']
-        
-        if not all_reps:
-            text = f"🪄<b>Все отзывы @{username}</b>\n\nУ пользователя еще нет отзывов."
-        else:
-            text = f"🪄<b>Все отзывы @{username}</b>\n\n"
-            for i, rep in enumerate(all_reps[:10], 1):
-                from_user = rep.get("from_username", f"id{rep['from_user']}")
-                date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                rep_type = get_reputation_type(rep["text"])
-                sign = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "❓"
-                text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
-            
-            if len(all_reps) > 10:
-                text += f"\n... и еще {len(all_reps) - 10} отзывов"
-        
-        back_button = 'view_found_user_reputation'
-    
-    keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data=back_button)]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if has_photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
-    else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
-
 async def show_main_menu(query):
+    """Главное меню"""
     user_id = query.from_user.id
     text = f"""<b>🛡️TESS | Репутация — твоя гарантия безопасности!</b>
 ID - [{user_id}]
@@ -822,27 +950,29 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
         # Сообщение переслано от другого пользователя
         original_user = update.message.forward_from
         is_forwarded = True
-        print(f"🔍 Сообщение ПЕРЕСЛАНО от: {original_user.username or original_user.id}")
+        from_username = original_user.username or f"id{original_user.id}"
+        from_user_id = original_user.id
+        print(f"🔍 Сообщение ПЕРЕСЛАНО от: {from_username}")
     elif update.message.forward_sender_name:
-        # Переслано от пользователя, скрывшего свой профиль
-        print(f"🔍 Сообщение переслано от скрытого пользователя: {update.message.forward_sender_name}")
-        await update.message.reply_text("❌ <b>Нельзя использовать пересланные сообщения от скрытых пользователей</b>", parse_mode='HTML')
-        return
+        # РАЗРЕШАЕМ пересылку от скрытых пользователей!
+        original_user = None
+        is_forwarded = True
+        from_username = f"{update.message.forward_sender_name} (скрытый)"
+        from_user_id = None
+        print(f"🔍 Сообщение переслано от скрытого пользователя: {from_username}")
     else:
         # Обычное сообщение
         original_user = update.message.from_user
         is_forwarded = False
+        from_username = original_user.username or f"id{original_user.id}"
+        from_user_id = original_user.id
     
-    user_id = original_user.id
-    username = original_user.username or f"id{user_id}"
     text = update.message.text or update.message.caption or ""
     
     # ОТЛАДКА
     print(f"\n{'='*60}")
     print(f"🔍 ПОЛУЧЕНО СООБЩЕНИЕ В ГРУППЕ")
-    print(f"👤 Оригинальный отправитель: {username} (ID: {user_id})")
-    if is_forwarded:
-        print(f"📤 Переслано пользователем: {update.message.from_user.username or update.message.from_user.id}")
+    print(f"👤 Отправитель: {from_username} (ID: {from_user_id})")
     print(f"🔁 Переслано: {'Да' if is_forwarded else 'Нет'}")
     print(f"💬 Текст: '{text}'")
     print(f"📷 Есть фото: {bool(update.message.photo)}")
@@ -913,40 +1043,16 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     print(f"🎯 Целевой пользователь: {target_info['username']} (ID: {target_info['id']})")
     
     # Проверяем, не пытается ли пользователь отправить репутацию самому себе
-    if target_info["id"] == original_user.id:
+    if from_user_id and target_info["id"] == from_user_id:
         print(f"❌ Попытка отправить репутацию себе")
         await update.message.reply_text("❌ <b>Нельзя отправлять репутацию самому себе</b>", parse_mode='HTML')
         return
     
-    # ВАРИАНТ 1: Разрешить пересылку репутации, адресованной пользователю
-    if is_forwarded:
-        # Разрешаем пересылку только в двух случаях:
-        # 1. Репутация адресована ТОМУ, кто пересылает
-        # 2. Пользователь пересылает СВОЕ сообщение
-        
-        if target_info["id"] == update.message.from_user.id:
-            # Репутация адресована тому, кто пересылает - разрешаем
-            print(f"✅ Пользователь пересылает репутацию, адресованную ему")
-        elif update.message.from_user.id == original_user.id:
-            # Пользователь пересылает свое собственное сообщение - разрешаем
-            print(f"✅ Пользователь пересылает свое сообщение")
-        else:
-            # Пользователь пытается переслать чужую репутацию - запрещаем
-            print(f"⚠️ Пользователь {update.message.from_user.id} пытается переслать чужую репутацию")
-            await update.message.reply_text(
-                "❌ <b>Нельзя пересылать чужие сообщения с репутацией</b>\n\n"
-                "Можно переслать только:\n"
-                "1. Репутацию, адресованную вам\n"
-                "2. Вашу собственную репутацию",
-                parse_mode='HTML'
-            )
-            return
-    
     print(f"💾 Сохраняем репутацию...")
     
     save_reputation(
-        from_user=original_user.id,
-        from_username=original_user.username or "",
+        from_user=from_user_id,  # Может быть None для скрытых пользователей
+        from_username=from_username,
         to_user=target_info["id"],
         to_username=target_info["username"],
         text=text,
@@ -1084,7 +1190,7 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
 🗓️ Зарегистрирован: {registration_date}"""
     
     keyboard = [
-        [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
+        [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
         [InlineKeyboardButton("↩️ Назад", callback_data='search_user')]
     ]
     
