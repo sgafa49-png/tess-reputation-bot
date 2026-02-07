@@ -387,16 +387,20 @@ async def start(update: Update, context: CallbackContext) -> None:
     
     save_user(user_id, username)
     
-    # ПРОВЕРКА DEEPLINK В САМОМ НАЧАЛЕ
+    # ВАЖНО: Если пользователь пришёл по ссылке из чата
     if context.args and context.args[0].startswith('view_'):
         try:
             target_user_id = int(context.args[0].replace('view_', ''))
-            # Отправляем фото с профилем при deeplink
-            await show_profile_deeplink_with_photo(update, target_user_id, context)
+            # Сохраняем ID найденного пользователя
+            context.user_data['found_user_id'] = target_user_id
+            
+            # Отправляем профиль пользователя С КНОПКАМИ КОТОРЫЕ РАБОТАЮТ
+            await show_profile_with_working_buttons(update, target_user_id, context)
             return
         except:
             pass
     
+    # Обычный старт
     text = f"""<b>🛡️TESS | Репутация — вселенная безграничных возможностей!</b>
 ID - [{user_id}]
 
@@ -410,7 +414,6 @@ ID - [{user_id}]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Отправляем фото с текстом в качестве подписи
     try:
         await update.message.reply_photo(
             photo=PHOTO_URL,
@@ -422,8 +425,8 @@ ID - [{user_id}]
         print(f"Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
-async def show_profile_deeplink_with_photo(update: Update, target_user_id: int, context: CallbackContext):
-    """Показать профиль при переходе из чата (С ФОТО)"""
+async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
+    """Показать профиль пользователя с РАБОТАЮЩИМИ кнопками при переходе из чата"""
     user_id = update.effective_user.id
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
@@ -450,8 +453,10 @@ async def show_profile_deeplink_with_photo(update: Update, target_user_id: int, 
 
 🗓️ Зарегистрирован: {registration_date}"""
     
+    # ВАЖНО: Сохраняем ID найденного пользователя
     context.user_data['found_user_id'] = target_user_id
     
+    # ВАЖНО: Используем РАБОЧИЕ callback_data
     keyboard = [
         [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
         [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
@@ -460,7 +465,6 @@ async def show_profile_deeplink_with_photo(update: Update, target_user_id: int, 
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Отправляем фото с профилем
     try:
         await update.message.reply_photo(
             photo=PHOTO_URL,
@@ -469,7 +473,7 @@ async def show_profile_deeplink_with_photo(update: Update, target_user_id: int, 
             parse_mode='HTML'
         )
     except Exception as e:
-        print(f"Ошибка отправки фото при deeplink: {e}")
+        print(f"Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def button_handler(update: Update, context: CallbackContext) -> None:
@@ -555,9 +559,14 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await show_main_menu(query)
     
     elif query.data == 'view_found_user_reputation':
+        # ВАЖНО: Проверяем, есть ли сохранённый ID пользователя
         target_user_id = context.user_data.get('found_user_id')
         if target_user_id:
+            # Открываем меню выбора типа репутации ДЛЯ НАЙДЕННОГО ПОЛЬЗОВАТЕЛЯ
             await show_found_user_reputation_menu(query, target_user_id)
+        else:
+            # Если ID не найден, возвращаем в главное меню
+            await show_main_menu(query)
     
     elif query.data.startswith('found_show_'):
         await handle_found_user_reputation(query, context)
