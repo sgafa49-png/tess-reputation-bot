@@ -271,9 +271,9 @@ def get_reputation_stats(user_id):
     
     for rep in all_reps:
         text_lower = rep["text"].lower()
-        if re.search(r'^[+]\s*(?:rep|реп)', text_lower):
+        if re.search(r'\b[+]\s*(?:rep|реп)\b', text_lower):
             positive += 1
-        elif re.search(r'^[-]\s*(?:rep|реп)', text_lower):
+        elif re.search(r'\b[-]\s*(?:rep|реп)\b', text_lower):
             negative += 1
     
     total = positive + negative
@@ -293,7 +293,7 @@ def get_last_positive(user_id):
     """Получить последний положительный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()):
+        if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower()):
             return rep
     return None
 
@@ -301,7 +301,7 @@ def get_last_negative(user_id):
     """Получить последний отрицательный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'^[-]\s*(?:rep|реп)', rep["text"].lower()):
+        if re.search(r'\b[-]\s*(?:rep|реп)\b', rep["text"].lower()):
             return rep
     return None
 
@@ -426,7 +426,7 @@ ID - [{user_id}]
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
-    """Показать профиль пользователя с РАБОТАЮЩИМИ кнопками при переходе из чата"""
+    """Показать профиль пользователя с РАБОЧАЮЩИМИ кнопками при переходе из чата"""
     user_id = update.effective_user.id
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
@@ -699,7 +699,7 @@ async def handle_show_reputation(query):
     
     if query.data == 'show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'^[+]\s*(?:rep|реп)', r["text"].lower())]
+                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower())]
         
         if not positive_reps:
             text = "🪄<b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
@@ -717,7 +717,7 @@ async def handle_show_reputation(query):
     
     elif query.data == 'show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'^[-]\s*(?:rep|реп)', r["text"].lower())]
+                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower())]
         
         if not negative_reps:
             text = "🪄<b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
@@ -743,7 +743,7 @@ async def handle_show_reputation(query):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()) else "❌"
+                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower()) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -814,7 +814,7 @@ async def handle_found_user_reputation(query, context):
     
     if query.data == 'found_show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'^[+]\s*(?:rep|реп)', r["text"].lower())]
+                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower())]
         
         if not positive_reps:
             text = f"🪄<b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
@@ -832,7 +832,7 @@ async def handle_found_user_reputation(query, context):
     
     elif query.data == 'found_show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'^[-]\s*(?:rep|реп)', r["text"].lower())]
+                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower())]
         
         if not negative_reps:
             text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
@@ -858,7 +858,7 @@ async def handle_found_user_reputation(query, context):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'^[+]\s*(?:rep|реп)', rep["text"].lower()) else "❌"
+                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower()) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -932,7 +932,14 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     
     user_id = update.effective_user.id
     username = update.effective_user.username or f"id{user_id}"
+    
+    # ВАЖНО: Сохраняем ВСЕХ кто пишет в чате (даже без /start)
     save_user(user_id, username)
+    
+    # Если это реплай - сохраняем и того, на кого реплай
+    if update.message.reply_to_message:
+        reply_user = update.message.reply_to_message.from_user
+        save_user(reply_user.id, reply_user.username or f"id{reply_user.id}")
     
     if update.message.chat.type == 'private':
         # Проверяем состояния в правильном порядке
@@ -950,21 +957,9 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     text = update.message.text or update.message.caption or ""
     
     # Проверяем, является ли это командой репутации
-    clean_text = text.strip().lower()
-    
-    is_rep_command = False
-    
-    # Проверка начала сообщения с поддержкой пробелов
-    if re.search(r'^[-+]\s*(?:rep|реп)', clean_text):
-        is_rep_command = True
-    
-    # Проверка после переноса строки
-    if not is_rep_command and '\n' in text:
-        lines = text.lower().split('\n')
-        for line in lines:
-            if re.search(r'^[-+]\s*(?:rep|реп)', line.strip()):
-                is_rep_command = True
-                break
+    # ИЩЕМ +rep ИЛИ -rep КАК ОТДЕЛЬНОЕ СЛОВО В ЛЮБОМ МЕСТЕ (не только в начале!)
+    # УБИРАЕМ ^ который означает "начало строки"
+    is_rep_command = bool(re.search(r'\b[+-]\s*(?:rep|реп)\b', text, re.IGNORECASE))
     
     # Если это НЕ команда репутации - игнорируем
     if not is_rep_command:
@@ -978,10 +973,15 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     # Получаем целевого пользователя из текста
     target_identifier = None
     
-    # Паттерны для поиска username/id в команде репутации (с поддержкой пробелов)
+    # ПАТТЕРНЫ ДЛЯ ПОИСКА USERNAME/ID В ЛЮБОМ МЕСТЕ СООБЩЕНИЯ
+    # Теперь ищем username/id в любом месте относительно +rep/-rep
     patterns = [
-        r'[-+]\s*(?:rep|реп)\s+(@?\w+)',
-        r'[-+]\s*(?:rep|реп)\s+(\d+)',
+        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',      # @username после +rep
+        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',         # ID после +rep
+        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',          # @username до +rep
+        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',           # ID до +rep
+        r'(@\w+)\+ *(?:rep|реп)\b',                      # @username+rep слитно с плюсом
+        r'(@\w+)- *(?:rep|реп)\b',                       # @username-rep слитно с минусом
     ]
     
     for pattern in patterns:
@@ -991,33 +991,32 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
             break
     
     if not target_identifier:
-        await update.message.reply_text("Неверный формат")
-        return
-    
-    target_info = {"id": None, "username": None}
-    
-    if target_identifier.isdigit():
-        target_info["id"] = int(target_identifier)
-        target_info["username"] = f"id{target_identifier}"
-    
-    elif update.message.reply_to_message:
-        target_info["id"] = update.message.reply_to_message.from_user.id
-        target_username = update.message.reply_to_message.from_user.username
-        target_info["username"] = target_username or f"id{target_info['id']}"
-        
-    else:
-        username = target_identifier.lstrip('@')
-        user_info = get_user_by_username(username)
-        
-        if user_info:
-            target_info["id"] = user_info['user_id']
-            target_info["username"] = user_info['username']
+        # Проверяем реплай
+        if update.message.reply_to_message:
+            target_user = update.message.reply_to_message.from_user
+            target_info = {"id": target_user.id, "username": target_user.username or f"id{target_user.id}"}
         else:
-            await update.message.reply_text("❌ <b>Пользователь не найден</b>\nИспользуйте реплай или ID", parse_mode='HTML')
+            await update.message.reply_text("❌ <b>Не найден username/id в сообщении</b>", parse_mode='HTML')
             return
+    else:
+        target_info = {"id": None, "username": None}
+        
+        if target_identifier.isdigit():
+            target_info["id"] = int(target_identifier)
+            target_info["username"] = f"id{target_identifier}"
+        else:
+            username = target_identifier.lstrip('@')
+            user_info = get_user_by_username(username)
+            
+            if user_info:
+                target_info["id"] = user_info['user_id']
+                target_info["username"] = user_info['username']
+            else:
+                await update.message.reply_text("❌ <b>Пользователь не найден в базе</b>\nИспользуйте реплай или ID", parse_mode='HTML')
+                return
     
     if target_info["id"] == user_id:
-        await update.message.reply_text("Нельзя себе")
+        await update.message.reply_text("❌ <b>Нельзя отправлять репутацию самому себе</b>", parse_mode='HTML')
         return
     
     save_reputation(
@@ -1045,7 +1044,16 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         await update.message.reply_text("❌ <b>Добавьте текст к фото!</b>\n\nПример: +rep @username сделка прошла успешно", parse_mode='HTML')
         return
     
-    patterns = [r'[-+]\s*(?:rep|реп)\s+(@?\w+)']
+    # ИЩЕМ +rep ИЛИ -rep В ЛЮБОМ МЕСТЕ
+    patterns = [
+        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',
+        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',
+        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
+        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
+        r'(@\w+)\+ *(?:rep|реп)\b',
+        r'(@\w+)- *(?:rep|реп)\b',
+    ]
+    
     target_identifier = None
     
     for pattern in patterns:
@@ -1074,7 +1082,7 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
             return
     
     if target_info["id"] == user_id:
-        await update.message.reply_text("Нельзя себе")
+        await update.message.reply_text("❌ <b>Нельзя отправлять репутацию самому себе</b>", parse_mode='HTML')
         return
     
     save_reputation(
