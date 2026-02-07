@@ -3,7 +3,7 @@ import re
 import sys
 import psycopg2
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application, 
     CommandHandler, 
@@ -499,7 +499,7 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str) 
     # Редактируем текущее сообщение, заменяя фото
     try:
         await query.edit_message_media(
-            media=telegram.InputMediaPhoto(
+            media=InputMediaPhoto(
                 media=rep_data['photo_id'],
                 caption=caption,
                 parse_mode='HTML'
@@ -510,13 +510,21 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str) 
         print(f"❌ Ошибка редактирования фото: {e}")
         # Если не удалось отредактировать фото, пробуем отредактировать текст
         try:
-            await query.edit_message_text(
-                text=f"{caption}\n\n⚠️ Фото недоступно",
+            await query.edit_message_caption(
+                caption=f"{caption}\n\n⚠️ Фото недоступно",
                 reply_markup=reply_markup,
                 parse_mode='HTML'
             )
         except Exception as e2:
-            print(f"❌ Ошибка редактирования текста: {e2}")
+            print(f"❌ Ошибка редактирования подписи: {e2}")
+            try:
+                await query.edit_message_text(
+                    text=f"{caption}\n\n⚠️ Фото недоступно",
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
+            except Exception as e3:
+                print(f"❌ Ошибка редактирования текста: {e3}")
 
 async def show_my_reputation_menu(query, rep_type='all'):
     """Показать меню репутации с кнопками для просмотра фото"""
@@ -721,11 +729,12 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         if len(parts) >= 4:
             rep_id = int(parts[2])
             rep_type = parts[3]
+            # Для своих отзывов возвращаемся к соответствующему списку
             back_context = f"back_to_list_{rep_type}"
             await show_reputation_photo(update, rep_id, back_context)
         return
     
-    # Обработка возврата к списку
+    # Обработка возврата к списку (свои отзывы)
     if query.data.startswith('back_to_list_'):
         rep_type = query.data.replace('back_to_list_', '')
         await show_my_reputation_menu(query, rep_type)
@@ -737,16 +746,21 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         if len(parts) >= 5:
             rep_id = int(parts[3])
             rep_type = parts[4]
-            back_context = f"found_back_to_list_{rep_type}"
+            # Для найденных пользователей сохраняем user_id в callback
+            back_context = f"found_back_to_list_{rep_type}_{context.user_data.get('found_user_id', 0)}"
             await show_reputation_photo(update, rep_id, back_context)
         return
     
     # Обработка возврата к списку для найденных пользователей
     if query.data.startswith('found_back_to_list_'):
-        rep_type = query.data.replace('found_back_to_list_', '')
-        target_user_id = context.user_data.get('found_user_id')
-        if target_user_id:
-            await show_found_user_reputation_menu(query, target_user_id, rep_type)
+        parts = query.data.split('_')
+        if len(parts) >= 5:
+            rep_type = parts[3]
+            target_user_id = int(parts[4])
+            if target_user_id > 0:
+                await show_found_user_reputation_menu(query, target_user_id, rep_type)
+            else:
+                await query.edit_message_text("Ошибка: пользователь не найден")
         return
     
     if query.data == 'send_reputation':
@@ -999,8 +1013,6 @@ ID - [{user_id}]
     if query.message.photo:
         try:
             # Если есть фото, редактируем его
-            from telegram import InputMediaPhoto
-            
             await query.edit_message_media(
                 media=InputMediaPhoto(
                     media=PHOTO_URL,
