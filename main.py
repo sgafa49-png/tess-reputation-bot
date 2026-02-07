@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-import sqlite3
+import psycopg2
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,83 +13,39 @@ from telegram.ext import (
     filters
 )
 
-# ========== НАСТРОЙКИ СРЕДЫ ==========
-def is_railway():
-    """Проверяем что мы на Railway"""
-    db_url = os.environ.get('DATABASE_URL', '')
-    return 'railway.app' in db_url and db_url.startswith('postgresql://')
-
-def is_replit():
-    """Проверяем, запущены ли на Replit"""
-    return 'REPL_ID' in os.environ
-
-# Очистка переменных если на Replit
-if is_replit():
-    os.environ.pop('DATABASE_URL', None)
-    os.environ.pop('RAILWAY_ENVIRONMENT', None)
-    print("Очищены Railway переменные (Replit режим)")
-
-# Получаем токен
+# ========== НАСТРОЙКИ ==========
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    print("ОШИБКА: TELEGRAM_TOKEN не найден!")
+    print("❌ ОШИБКА: TELEGRAM_TOKEN не найден!")
     sys.exit(1)
 
-# Ссылка на фото в GitHub
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if not DATABASE_URL:
+    print("❌ ОШИБКА: DATABASE_URL не найден!")
+    sys.exit(1)
+
 PHOTO_URL = "https://raw.githubusercontent.com/sgafa49-png/tess-reputation-bot/main/IMG_0354.jpeg"
 
-# ========== БАЗА ДАННЫХ (УНИВЕРСАЛЬНАЯ) ==========
+# ========== БАЗА ДАННЫХ POSTGRESQL ==========
 def get_db_connection():
-    """Возвращает соединение с БД в зависимости от платформы"""
-    if is_railway():
-        try:
-            import psycopg2
-            DATABASE_URL = os.environ.get('DATABASE_URL')
-            if DATABASE_URL:
-                conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-                print("Подключено к PostgreSQL (Railway)")
-                return conn
-        except Exception as e:
-            print(f"Ошибка PostgreSQL: {e}")
-    
-    # На Replit или при ошибке - используем SQLite
-    conn = sqlite3.connect('reputation.db')
-    print("Подключено к SQLite (Replit/Локально)")
-    return conn
+    """Возвращает соединение с PostgreSQL"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        print("✅ Подключено к PostgreSQL")
+        return conn
+    except Exception as e:
+        print(f"❌ Ошибка подключения PostgreSQL: {e}")
+        sys.exit(1)
 
 def init_db():
-    """Инициализация базы данных для обеих платформ"""
+    """Инициализация базы данных"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    if is_railway():
-        # PostgreSQL для Railway
-        try:
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    registered_at TEXT
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS reputation (
-                    id SERIAL PRIMARY KEY,
-                    from_user BIGINT,
-                    to_user BIGINT,
-                    text TEXT,
-                    photo_id TEXT,
-                    created_at TEXT
-                )
-            ''')
-        except Exception as e:
-            print(f"Ошибка создания таблиц PostgreSQL: {e}")
-    else:
-        # SQLite для Replit
+    try:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 username TEXT,
                 registered_at TEXT
             )
@@ -97,18 +53,21 @@ def init_db():
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reputation (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                from_user INTEGER,
-                to_user INTEGER,
+                id SERIAL PRIMARY KEY,
+                from_user BIGINT,
+                to_user BIGINT,
                 text TEXT,
                 photo_id TEXT,
                 created_at TEXT
             )
         ''')
-    
-    conn.commit()
-    conn.close()
-    print("База данных инициализирована")
+        
+        conn.commit()
+        print("✅ Таблицы созданы/проверены")
+    except Exception as e:
+        print(f"❌ Ошибка создания таблиц: {e}")
+    finally:
+        conn.close()
 
 # ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
 def save_user(user_id, username):
@@ -117,25 +76,16 @@ def save_user(user_id, username):
     cursor = conn.cursor()
     
     try:
-        if is_railway():
-            cursor.execute('''
-                INSERT INTO users (user_id, username, registered_at) 
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE 
-                SET username = EXCLUDED.username
-            ''', (user_id, username, datetime.now().isoformat()))
-        else:
-            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-            if not cursor.fetchone():
-                cursor.execute('INSERT INTO users VALUES (?, ?, ?)',
-                              (user_id, username, datetime.now().isoformat()))
-            else:
-                cursor.execute('UPDATE users SET username = ? WHERE user_id = ?', 
-                             (username, user_id))
+        cursor.execute('''
+            INSERT INTO users (user_id, username, registered_at) 
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE 
+            SET username = EXCLUDED.username
+        ''', (user_id, username, datetime.now().isoformat()))
         
         conn.commit()
     except Exception as e:
-        print(f"Ошибка сохранения пользователя {user_id}: {e}")
+        print(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
     finally:
         conn.close()
 
@@ -148,20 +98,15 @@ def save_reputation(from_user, from_username, to_user, to_username, text, photo_
     cursor = conn.cursor()
     
     try:
-        if is_railway():
-            cursor.execute('''
-                INSERT INTO reputation (from_user, to_user, text, photo_id, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-            ''', (from_user, to_user, text, photo_id, datetime.now().isoformat()))
-        else:
-            cursor.execute('''
-                INSERT INTO reputation (from_user, to_user, text, photo_id, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (from_user, to_user, text, photo_id, datetime.now().isoformat()))
+        cursor.execute('''
+            INSERT INTO reputation (from_user, to_user, text, photo_id, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (from_user, to_user, text, photo_id, datetime.now().isoformat()))
         
         conn.commit()
+        print(f"✅ Репутация сохранена: {from_user} → {to_user}")
     except Exception as e:
-        print(f"Ошибка сохранения репутации: {e}")
+        print(f"❌ Ошибка сохранения репутации: {e}")
     finally:
         conn.close()
 
@@ -172,22 +117,13 @@ def get_user_reputation(user_id):
     
     reps = []
     try:
-        if is_railway():
-            cursor.execute('''
-                SELECT r.*, u.username as from_username 
-                FROM reputation r
-                LEFT JOIN users u ON r.from_user = u.user_id
-                WHERE r.to_user = %s
-                ORDER BY r.created_at DESC
-            ''', (user_id,))
-        else:
-            cursor.execute('''
-                SELECT r.*, u.username as from_username 
-                FROM reputation r
-                LEFT JOIN users u ON r.from_user = u.user_id
-                WHERE r.to_user = ?
-                ORDER BY r.created_at DESC
-            ''', (user_id,))
+        cursor.execute('''
+            SELECT r.*, u.username as from_username 
+            FROM reputation r
+            LEFT JOIN users u ON r.from_user = u.user_id
+            WHERE r.to_user = %s
+            ORDER BY r.created_at DESC
+        ''', (user_id,))
         
         rows = cursor.fetchall()
         
@@ -202,7 +138,7 @@ def get_user_reputation(user_id):
                 'from_username': row[6] or f"id{row[1]}"
             })
     except Exception as e:
-        print(f"Ошибка получения репутации: {e}")
+        print(f"❌ Ошибка получения репутации: {e}")
     finally:
         conn.close()
     
@@ -214,11 +150,7 @@ def get_user_info(user_id):
     cursor = conn.cursor()
     
     try:
-        if is_railway():
-            cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
-        else:
-            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        
+        cursor.execute('SELECT * FROM users WHERE user_id = %s', (user_id,))
         row = cursor.fetchone()
         
         if row:
@@ -228,7 +160,7 @@ def get_user_info(user_id):
                 'registered_at': row[2]
             }
     except Exception as e:
-        print(f"Ошибка получения пользователя {user_id}: {e}")
+        print(f"❌ Ошибка получения пользователя {user_id}: {e}")
     finally:
         conn.close()
     
@@ -242,11 +174,7 @@ def get_user_by_username(username):
     username = username.lstrip('@')
     
     try:
-        if is_railway():
-            cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
-        else:
-            cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
-        
+        cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
         row = cursor.fetchone()
         
         if row:
@@ -256,7 +184,7 @@ def get_user_by_username(username):
                 'registered_at': row[2]
             }
     except Exception as e:
-        print(f"Ошибка поиска пользователя {username}: {e}")
+        print(f"❌ Ошибка поиска пользователя {username}: {e}")
     finally:
         conn.close()
     
@@ -271,9 +199,9 @@ def get_reputation_stats(user_id):
     
     for rep in all_reps:
         text_lower = rep["text"].lower()
-        if re.search(r'\b[+]\s*(?:rep|реп)\b', text_lower):
+        if re.search(r'\b[+]\s*(?:rep|реп)\b', text_lower, re.IGNORECASE):
             positive += 1
-        elif re.search(r'\b[-]\s*(?:rep|реп)\b', text_lower):
+        elif re.search(r'\b[-]\s*(?:rep|реп)\b', text_lower, re.IGNORECASE):
             negative += 1
     
     total = positive + negative
@@ -293,7 +221,7 @@ def get_last_positive(user_id):
     """Получить последний положительный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower()):
+        if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE):
             return rep
     return None
 
@@ -301,7 +229,7 @@ def get_last_negative(user_id):
     """Получить последний отрицательный отзыв"""
     all_reps = get_user_reputation(user_id)
     for rep in all_reps:
-        if re.search(r'\b[-]\s*(?:rep|реп)\b', rep["text"].lower()):
+        if re.search(r'\b[-]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE):
             return rep
     return None
 
@@ -387,20 +315,15 @@ async def start(update: Update, context: CallbackContext) -> None:
     
     save_user(user_id, username)
     
-    # ВАЖНО: Если пользователь пришёл по ссылке из чата
     if context.args and context.args[0].startswith('view_'):
         try:
             target_user_id = int(context.args[0].replace('view_', ''))
-            # Сохраняем ID найденного пользователя
             context.user_data['found_user_id'] = target_user_id
-            
-            # Отправляем профиль пользователя С КНОПКАМИ КОТОРЫЕ РАБОТАЮТ
             await show_profile_with_working_buttons(update, target_user_id, context)
             return
         except:
             pass
     
-    # Обычный старт
     text = f"""<b>🛡️TESS | Репутация — вселенная безграничных возможностей!</b>
 ID - [{user_id}]
 
@@ -422,12 +345,11 @@ ID - [{user_id}]
             parse_mode='HTML'
         )
     except Exception as e:
-        print(f"Ошибка отправки фото: {e}")
+        print(f"❌ Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
-    """Показать профиль пользователя с РАБОЧАЮЩИМИ кнопками при переходе из чата"""
-    user_id = update.effective_user.id
+    """Показать профиль пользователя с кнопками при переходе из чата"""
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
     
@@ -453,10 +375,8 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
 
 🗓️ Зарегистрирован: {registration_date}"""
     
-    # ВАЖНО: Сохраняем ID найденного пользователя
     context.user_data['found_user_id'] = target_user_id
     
-    # ВАЖНО: Используем РАБОЧИЕ callback_data
     keyboard = [
         [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
         [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
@@ -473,20 +393,18 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
             parse_mode='HTML'
         )
     except Exception as e:
-        print(f"Ошибка отправки фото: {e}")
+        print(f"❌ Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def button_handler(update: Update, context: CallbackContext) -> None:
+    """Обработчик кнопок"""
     query = update.callback_query
     await query.answer()
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     if query.data.startswith('send_to_'):
         target_user_id = int(query.data.replace('send_to_', ''))
-        user_id = query.from_user.id
-        
         target_user_info = get_user_info(target_user_id)
         target_username = target_user_info.get("username", f"id{target_user_id}") if target_user_info else f"id{target_user_id}"
         
@@ -510,19 +428,10 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Редактируем в зависимости от типа сообщения
         if has_photo:
-            await query.edit_message_caption(
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
         else:
-            await query.edit_message_text(
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         context.user_data['waiting_for_rep'] = True
     
     elif query.data == 'search_user':
@@ -532,18 +441,9 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if has_photo:
-            await query.edit_message_caption(
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
         else:
-            await query.edit_message_text(
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-        # Устанавливаем флаг ожидания поиска
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
         context.user_data['waiting_for_search'] = True
     
     elif query.data == 'profile':
@@ -559,13 +459,10 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await show_main_menu(query)
     
     elif query.data == 'view_found_user_reputation':
-        # ВАЖНО: Проверяем, есть ли сохранённый ID пользователя
         target_user_id = context.user_data.get('found_user_id')
         if target_user_id:
-            # Открываем меню выбора типа репутации ДЛЯ НАЙДЕННОГО ПОЛЬЗОВАТЕЛЯ
             await show_found_user_reputation_menu(query, target_user_id)
         else:
-            # Если ID не найден, возвращаем в главное меню
             await show_main_menu(query)
     
     elif query.data.startswith('found_show_'):
@@ -602,7 +499,6 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
 
 🗓️ Зарегистрирован: {registration_date}"""
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     if is_own_profile:
@@ -620,22 +516,13 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if has_photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_my_reputation_menu(query):
     text = "<b>Выберите раздел:</b>"
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     keyboard = [
@@ -650,22 +537,13 @@ async def show_my_reputation_menu(query):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if has_photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_found_user_reputation_menu(query, target_user_id):
     text = "<b>Выберите раздел:</b>"
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     keyboard = [
@@ -678,28 +556,19 @@ async def show_found_user_reputation_menu(query, target_user_id):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if has_photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_show_reputation(query):
     user_id = query.from_user.id
     stats = get_reputation_stats(user_id)
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     if query.data == 'show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower())]
+                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
         
         if not positive_reps:
             text = "🪄<b>Положительные отзывы</b>\n\nУ вас еще нет положительных отзывов."
@@ -717,7 +586,7 @@ async def handle_show_reputation(query):
     
     elif query.data == 'show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower())]
+                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
         
         if not negative_reps:
             text = "🪄<b>Отрицательные отзывы</b>\n\nУ вас еще нет отрицательных отзывов."
@@ -743,7 +612,7 @@ async def handle_show_reputation(query):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower()) else "❌"
+                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -787,17 +656,9 @@ async def handle_show_reputation(query):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if has_photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_found_user_reputation(query, context):
     target_user_id = context.user_data.get('found_user_id')
@@ -809,12 +670,11 @@ async def handle_found_user_reputation(query, context):
     user_info = get_user_info(target_user_id)
     username = user_info.get("username", "") if user_info else f"id{target_user_id}"
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     if query.data == 'found_show_positive':
         positive_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower())]
+                        if re.search(r'\b[+]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
         
         if not positive_reps:
             text = f"🪄<b>Положительные отзывы @{username}</b>\n\nУ пользователя еще нет положительных отзывов."
@@ -832,7 +692,7 @@ async def handle_found_user_reputation(query, context):
     
     elif query.data == 'found_show_negative':
         negative_reps = [r for r in stats['all_reps'] 
-                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower())]
+                        if re.search(r'\b[-]\s*(?:rep|реп)\b', r["text"].lower(), re.IGNORECASE)]
         
         if not negative_reps:
             text = f"🪄<b>Отрицательные отзывы @{username}</b>\n\nУ пользователя еще нет отрицательных отзывов."
@@ -858,7 +718,7 @@ async def handle_found_user_reputation(query, context):
             for i, rep in enumerate(all_reps[:10], 1):
                 from_user = rep.get("from_username", f"id{rep['from_user']}")
                 date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower()) else "❌"
+                sign = "✅" if re.search(r'\b[+]\s*(?:rep|реп)\b', rep["text"].lower(), re.IGNORECASE) else "❌"
                 text += f"{i}. {sign} От @{from_user}\n   {rep['text'][:50]}...\n   📅 {date}\n\n"
             
             if len(all_reps) > 10:
@@ -870,17 +730,9 @@ async def handle_found_user_reputation(query, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if has_photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_main_menu(query):
     user_id = query.from_user.id
@@ -897,17 +749,11 @@ ID - [{user_id}]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Проверяем, есть ли фото в сообщении
     has_photo = query.message.photo is not None
     
     if has_photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        # Если сообщение текстовое - переотправляем с фото
         try:
             await query.message.delete()
             await query.message.chat.send_photo(
@@ -917,32 +763,26 @@ ID - [{user_id}]
                 parse_mode='HTML'
             )
         except Exception as e:
-            print(f"Ошибка отправки фото: {e}")
-            await query.edit_message_text(
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
+            print(f"❌ Ошибка отправки фото: {e}")
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     """Обработка ВСЕХ сообщений"""
-    # Проверяем, что есть message
     if not update.message:
         return
     
     user_id = update.effective_user.id
     username = update.effective_user.username or f"id{user_id}"
     
-    # ВАЖНО: Сохраняем ВСЕХ кто пишет в чате (даже без /start)
+    # Сохраняем отправителя
     save_user(user_id, username)
     
-    # Если это реплай - сохраняем и того, на кого реплай
-    if update.message.reply_to_message:
+    # Сохраняем пользователя из реплая (если есть и он валидный)
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
         reply_user = update.message.reply_to_message.from_user
         save_user(reply_user.id, reply_user.username or f"id{reply_user.id}")
     
     if update.message.chat.type == 'private':
-        # Проверяем состояния в правильном порядке
         if context.user_data.get('waiting_for_search'):
             await handle_search_message_pm(update, context)
         elif context.user_data.get('waiting_for_rep'):
@@ -952,51 +792,60 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
         await handle_group_reputation(update, context)
 
 async def handle_group_reputation(update: Update, context: CallbackContext) -> None:
-    """Обработка репутации в групповом чате"""
+    """Обработка репутации в групповом чате - С ОТЛАДКОЙ"""
     user_id = update.effective_user.id
+    username = update.effective_user.username or f"id{user_id}"
     text = update.message.text or update.message.caption or ""
     
+    # ОТЛАДКА
+    print(f"\n{'='*60}")
+    print(f"🔍 ПОЛУЧЕНО СООБЩЕНИЕ В ГРУППЕ")
+    print(f"👤 От: {username} (ID: {user_id})")
+    print(f"💬 Текст: {text}")
+    print(f"📷 Есть фото: {bool(update.message.photo)}")
+    print(f"💬 Тип чата: {update.message.chat.type}")
+    print(f"{'='*60}")
+    
     # Проверяем, является ли это командой репутации
-    # ИЩЕМ +rep ИЛИ -rep КАК ОТДЕЛЬНОЕ СЛОВО В ЛЮБОМ МЕСТЕ (не только в начале!)
-    # УБИРАЕМ ^ который означает "начало строки"
     is_rep_command = bool(re.search(r'\b[+-]\s*(?:rep|реп)\b', text, re.IGNORECASE))
     
-    # Если это НЕ команда репутации - игнорируем
+    print(f"🔍 Поиск +rep/-rep: {'НАЙДЕНО' if is_rep_command else 'НЕ НАЙДЕНО'}")
+    
     if not is_rep_command:
+        print(f"❌ Не команда репутации - игнорируем")
         return
     
-    # Проверяем наличие фото
     if not update.message.photo:
+        print(f"❌ Нет фото - отправляем ошибку")
         await update.message.reply_text("❗️ <b>Необходимо прикрепить фото/скриншот</b>", parse_mode='HTML')
         return
     
-    # Получаем целевого пользователя из текста
+    print(f"✅ Фото есть, продолжаем обработку")
+    
     target_identifier = None
     
-    # ПАТТЕРНЫ ДЛЯ ПОИСКА USERNAME/ID В ЛЮБОМ МЕСТЕ СООБЩЕНИЯ
-    # Теперь ищем username/id в любом месте относительно +rep/-rep
     patterns = [
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',      # @username после +rep
-        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',         # ID после +rep
-        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',          # @username до +rep
-        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',           # ID до +rep
-        r'(@\w+)\+ *(?:rep|реп)\b',                      # @username+rep слитно с плюсом
-        r'(@\w+)- *(?:rep|реп)\b',                       # @username-rep слитно с минусом
+        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',
+        r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',
+        r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
+        r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
     ]
     
-    for pattern in patterns:
+    for i, pattern in enumerate(patterns):
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             target_identifier = match.group(1)
+            print(f"🔍 Паттерн {i+1} совпал: {target_identifier}")
             break
     
     if not target_identifier:
-        # Проверяем реплай
         if update.message.reply_to_message:
+            print(f"🔍 Используем реплай для определения пользователя")
             target_user = update.message.reply_to_message.from_user
             target_info = {"id": target_user.id, "username": target_user.username or f"id{target_user.id}"}
         else:
-            await update.message.reply_text("❌ <b>Не найден username/id в сообщении</b>", parse_mode='HTML')
+            print(f"❌ Не найден username/id в сообщении")
+            await update.message.reply_text("❌ <b>Не найден username/id в сообщении</b>\nИспользуйте: @username +rep или реплай", parse_mode='HTML')
             return
     else:
         target_info = {"id": None, "username": None}
@@ -1004,20 +853,28 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
         if target_identifier.isdigit():
             target_info["id"] = int(target_identifier)
             target_info["username"] = f"id{target_identifier}"
+            print(f"🔍 Найден ID: {target_info['id']}")
         else:
-            username = target_identifier.lstrip('@')
-            user_info = get_user_by_username(username)
+            username_search = target_identifier.lstrip('@')
+            user_info = get_user_by_username(username_search)
             
             if user_info:
                 target_info["id"] = user_info['user_id']
                 target_info["username"] = user_info['username']
+                print(f"🔍 Найден username: @{target_info['username']} (ID: {target_info['id']})")
             else:
+                print(f"❌ Пользователь @{username_search} не найден в базе")
                 await update.message.reply_text("❌ <b>Пользователь не найден в базе</b>\nИспользуйте реплай или ID", parse_mode='HTML')
                 return
     
+    print(f"🎯 Целевой пользователь: {target_info['username']} (ID: {target_info['id']})")
+    
     if target_info["id"] == user_id:
+        print(f"❌ Попытка отправить репутацию себе")
         await update.message.reply_text("❌ <b>Нельзя отправлять репутацию самому себе</b>", parse_mode='HTML')
         return
+    
+    print(f"💾 Сохраняем репутацию...")
     
     save_reputation(
         from_user=user_id,
@@ -1028,6 +885,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
         photo_id=update.message.photo[-1].file_id
     )
     
+    print(f"✅ Репутация успешно сохранена!")
     await update.message.reply_text("✅ <b>Репутация сохранена</b>", parse_mode='HTML')
 
 async def handle_reputation_message_pm(update: Update, context: CallbackContext) -> None:
@@ -1039,19 +897,15 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         await update.message.reply_text("❗️ <b>Необходимо прикрепить фото/скриншот</b>", parse_mode='HTML')
         return
     
-    # Если текст пустой, просим добавить текст к фото
     if not text.strip():
         await update.message.reply_text("❌ <b>Добавьте текст к фото!</b>\n\nПример: +rep @username сделка прошла успешно", parse_mode='HTML')
         return
     
-    # ИЩЕМ +rep ИЛИ -rep В ЛЮБОМ МЕСТЕ
     patterns = [
         r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(@?\w+)',
         r'\b[+-]\s*(?:rep|реп)\b[\s:;,.]*(\d+)',
         r'(@\w+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
         r'(\d+)[\s:;,.]*[+-]\s*(?:rep|реп)\b',
-        r'(@\w+)\+ *(?:rep|реп)\b',
-        r'(@\w+)- *(?:rep|реп)\b',
     ]
     
     target_identifier = None
@@ -1172,38 +1026,12 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
 def main():
     """Основная функция запуска"""
     print("=" * 60)
-    print("TESS REPUTATION BOT")
+    print("🛡️ TESS REPUTATION BOT - PostgreSQL Version")
     print("=" * 60)
     
-    # Определяем платформу
-    if is_railway():
-        print("Платформа: Railway (PostgreSQL)")
-    elif is_replit():
-        print("Платформа: Replit (SQLite)")
-        # Запускаем Flask только на Replit
-        try:
-            from flask import Flask
-            from threading import Thread
-            
-            app_flask = Flask('')
-            @app_flask.route('/')
-            def home(): 
-                return "Бот работает!"
-            
-            def run():
-                app_flask.run(host='0.0.0.0', port=8080)
-            
-            t = Thread(target=run, daemon=True)
-            t.start()
-            print("Keep-alive сервер запущен (Replit)")
-        except ImportError:
-            print("Flask не установлен")
-    else:
-        print("Платформа: Локальный запуск (SQLite)")
-    
-    print(f"Токен: {'Установлен' if TOKEN else 'Отсутствует!'}")
-    print(f"URL фото: {PHOTO_URL}")
-    print("=" * 60)
+    print(f"✅ Токен: {'Установлен' if TOKEN else 'Отсутствует!'}")
+    print(f"✅ DATABASE_URL: {'Установлен' if DATABASE_URL else 'Отсутствует!'}")
+    print(f"✅ URL фото: {PHOTO_URL}")
     
     # Инициализация БД
     init_db()
@@ -1225,13 +1053,16 @@ def main():
     # Обработчик ВСЕХ сообщений (включая группы)
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all_messages))
     
-    # Запускаем бота
-    print("Бот запускается...")
-    print("Готов к работе!")
+    print("=" * 60)
+    print("🚀 Бот запускается...")
     print("=" * 60)
     
-    # Простой запуск
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Запускаем бота с сбросом старых обновлений
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        poll_timeout=30
+    )
 
 if __name__ == '__main__':
     main()
