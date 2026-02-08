@@ -38,7 +38,7 @@ def get_admin_menu_keyboard():
     """Меню админ-панели"""
     return ReplyKeyboardMarkup([
         ['Удалить отзыв'],
-        ['Статистика'],
+        ['Статистика', '📢 Пост в бота'],
         ['Главное меню']
     ], resize_keyboard=True, one_time_keyboard=False)
 
@@ -147,6 +147,23 @@ def save_reputation(from_user, from_username, to_user, to_username, text, photo_
         print(f"❌ Ошибка сохранения репутации: {e}")
     finally:
         conn.close()
+
+def get_all_users():  # 🆕 ФУНКЦИЯ ДЛЯ РАССЫЛКИ
+    """Получить всех пользователей из БД"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    users = []
+    try:
+        cursor.execute('SELECT user_id FROM users')
+        rows = cursor.fetchall()
+        users = [{'user_id': row[0]} for row in rows]
+    except Exception as e:
+        print(f"❌ Ошибка получения пользователей: {e}")
+    finally:
+        conn.close()
+    
+    return users
 
 def get_user_reputation(user_id):
     """Получаем всю репутацию пользователя"""
@@ -564,6 +581,7 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         context.user_data.pop('admin_action', None)
         context.user_data.pop('user_to_delete_reps', None)
         context.user_data.pop('rep_to_delete', None)
+        context.user_data.pop('broadcast_text', None)  # 🆕 Очищаем текст рассылки
         
         await update.message.reply_text(
             "🪄 Отменено",
@@ -604,6 +622,15 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         return
     
+    # 🆕 ОБРАБОТКА КНОПКИ "📢 Пост в бота"
+    if text == "📢 Пост в бота":
+        context.user_data['admin_action'] = 'broadcast'
+        await update.message.reply_text(
+            "📢 Введите текст для рассылки всем пользователям:\n\n(или отправьте ❌ Отмена)",
+            reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+        )
+        return
+    
     # 🔥 ИСПРАВЛЕНИЕ: Обработка кнопок подтверждения удаления
     if text == "✅ Да, удалить":
         rep_id = context.user_data.get('rep_to_delete')
@@ -633,6 +660,70 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         context.user_data.pop('admin_action', None)
         context.user_data.pop('rep_to_delete', None)
+    
+    # 🆕 ОБРАБОТКА ПОДТВЕРЖДЕНИЯ РАССЫЛКИ
+    elif text == "✅ Да, отправить":
+        # Получаем сохраненный текст рассылки
+        broadcast_text = context.user_data.get('broadcast_text')
+        if not broadcast_text:
+            await update.message.reply_text("❌ Текст рассылки не найден", reply_markup=get_admin_menu_keyboard())
+            return
+        
+        users = get_all_users()
+        total = len(users)
+        
+        if total == 0:
+            await update.message.reply_text("❌ Нет пользователей для рассылки", reply_markup=get_admin_menu_keyboard())
+            return
+        
+        # Отправка с прогрессом
+        progress_msg = await update.message.reply_text(f"📤 Начинаю рассылку... 0/{total}")
+        
+        success = 0
+        failed = 0
+        
+        for i, user in enumerate(users):
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=broadcast_text
+                )
+                success += 1
+            except Exception as e:
+                failed += 1
+            
+            # Обновляем прогресс каждые 10 отправок
+            if i % 10 == 0 or i == total - 1:
+                try:
+                    await progress_msg.edit_text(
+                        f"📤 Рассылка... {i+1}/{total}\n"
+                        f"✅ Успешно: {success}\n"
+                        f"❌ Ошибок: {failed}"
+                    )
+                except:
+                    pass
+        
+        # Итог
+        await update.message.reply_text(
+            f"✅ Рассылка завершена!\n\n"
+            f"📊 Всего пользователей: {total}\n"
+            f"✅ Отправлено: {success}\n"
+            f"❌ Не отправлено: {failed}\n\n"
+            f"Текст рассылки:\n{broadcast_text[:200]}{'...' if len(broadcast_text) > 200 else ''}",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        
+        # Очищаем данные
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('broadcast_text', None)
+    
+    elif text == "❌ Нет, отменить":
+        await update.message.reply_text(
+            "📢 Рассылка отменена",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('broadcast_text', None)
 
 async def show_user_reputations_for_deletion(update: Update, user_id: int):
     """Показать отзывы пользователя с кнопками удаления"""
@@ -719,6 +810,34 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
         # Показываем отзывы пользователя
         await show_user_reputations_for_deletion(update, target_id)
         context.user_data['admin_action'] = 'waiting_for_rep_selection'
+    
+    # 🆕 ОБРАБОТКА ВВОДА ТЕКСТА ДЛЯ РАССЫЛКИ
+    elif action == 'broadcast':
+        if not text or text.strip() == "":
+            await update.message.reply_text("❌ Введите текст для рассылки")
+            return
+        
+        # Сохраняем текст рассылки
+        context.user_data['broadcast_text'] = text.strip()
+        
+        # Получаем количество пользователей
+        users = get_all_users()
+        total = len(users)
+        
+        # Показываем предварительный просмотр и запрашиваем подтверждение
+        preview = text.strip()
+        if len(preview) > 100:
+            preview = preview[:97] + "..."
+        
+        await update.message.reply_text(
+            f"📢 ПРЕДПРОСМОТР РАССЫЛКИ\n\n"
+            f"{text.strip()}\n\n"
+            f"📊 Отправить {total} пользователям?\n\n"
+            f"Текст ({len(text.strip())} символов):\n{preview}",
+            reply_markup=ReplyKeyboardMarkup([
+                ['✅ Да, отправить', '❌ Нет, отменить']
+            ], resize_keyboard=True)
+        )
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
     """Обработка inline-кнопок админ-панели"""
@@ -1486,8 +1605,9 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
         
         # Обработка меню админ-панели (ДОБАВЛЕНО "❌ Отмена")
         admin_menu_commands = [
-            "Удалить отзыв", "Статистика", "Главное меню",
-            "✅ Да, удалить", "❌ Нет", "❌ Отмена"  # 🔥 ДОБАВЛЕНО
+            "Удалить отзыв", "Статистика", "📢 Пост в бота", "Главное меню",
+            "✅ Да, удалить", "❌ Нет", "❌ Отмена",  # 🔥 ДОБАВЛЕНО
+            "✅ Да, отправить", "❌ Нет, отменить"  # 🆕 ДОБАВЛЕНО для рассылки
         ]
         
         if text in admin_menu_commands:
