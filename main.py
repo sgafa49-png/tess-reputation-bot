@@ -3,7 +3,7 @@ import re
 import sys
 import psycopg2
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, 
     CommandHandler, 
@@ -25,6 +25,23 @@ if not DATABASE_URL:
     sys.exit(1)
 
 PHOTO_URL = "https://raw.githubusercontent.com/sgafa49-png/tess-reputation-bot/main/IMG_0354.jpeg"
+ADMINS = [8438564254, 7819922804]  # 🆕 ID админов
+
+# ========== КЛАВИАТУРЫ ========== 🆕
+def get_admin_keyboard():
+    """Клавиатура для админов (только кнопка админ-панели)"""
+    return ReplyKeyboardMarkup([
+        ['🪄 АДМИН ПАНЕЛЬ']
+    ], resize_keyboard=True, one_time_keyboard=False)
+
+def get_admin_menu_keyboard():
+    """Меню админ-панели"""
+    return ReplyKeyboardMarkup([
+        ['Удалить отзыв', 'Все отзывы'],
+        ['Поиск по ID', 'Статистика'],
+        ['Экспорт', 'Просмотр'],
+        ['Главное меню']
+    ], resize_keyboard=True, one_time_keyboard=False)
 
 # ========== КОНСТАНТЫ ДЛЯ РЕПУТАЦИИ ==========
 REP_PATTERN = re.compile(r'[+-][\s:;-]*(?:rep|реп|рп)(?:\s|$|[^a-za-zа-я0-9])', re.IGNORECASE)
@@ -210,6 +227,147 @@ def get_reputation_by_id(rep_id):
     
     return None
 
+def delete_reputation_by_id(rep_id):
+    """Удалить отзыв по ID""" # 🆕
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('DELETE FROM reputation WHERE id = %s', (rep_id,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        return deleted
+    except Exception as e:
+        print(f"❌ Ошибка удаления отзыва {rep_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_all_reputations(limit=50):
+    """Получить все отзывы (для админов)""" # 🆕
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    reps = []
+    try:
+        cursor.execute('''
+            SELECT r.*, u1.username as from_username, u2.username as to_username
+            FROM reputation r
+            LEFT JOIN users u1 ON r.from_user = u1.user_id
+            LEFT JOIN users u2 ON r.to_user = u2.user_id
+            ORDER BY r.created_at DESC
+            LIMIT %s
+        ''', (limit,))
+        
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            from_username = row[6]
+            if not from_username and row[1] is None:
+                from_username = "Скрытый профиль"
+            elif not from_username:
+                from_username = f"id{row[1]}"
+            
+            to_username = row[7]
+            if not to_username:
+                to_username = f"id{row[2]}"
+            
+            reps.append({
+                'id': row[0],
+                'from_user': row[1],
+                'to_user': row[2],
+                'text': row[3],
+                'photo_id': row[4],
+                'created_at': row[5],
+                'from_username': from_username,
+                'to_username': to_username
+            })
+    except Exception as e:
+        print(f"❌ Ошибка получения всех отзывов: {e}")
+    finally:
+        conn.close()
+    
+    return reps
+
+def get_reputations_by_user_id(user_id):
+    """Получить все отзывы пользователя (по from_user или to_user)""" # 🆕
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    reps = []
+    try:
+        cursor.execute('''
+            SELECT r.*, u1.username as from_username, u2.username as to_username
+            FROM reputation r
+            LEFT JOIN users u1 ON r.from_user = u1.user_id
+            LEFT JOIN users u2 ON r.to_user = u2.user_id
+            WHERE r.from_user = %s OR r.to_user = %s
+            ORDER BY r.created_at DESC
+            LIMIT 100
+        ''', (user_id, user_id))
+        
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            from_username = row[6]
+            if not from_username and row[1] is None:
+                from_username = "Скрытый профиль"
+            elif not from_username:
+                from_username = f"id{row[1]}"
+            
+            to_username = row[7]
+            if not to_username:
+                to_username = f"id{row[2]}"
+            
+            reps.append({
+                'id': row[0],
+                'from_user': row[1],
+                'to_user': row[2],
+                'text': row[3],
+                'photo_id': row[4],
+                'created_at': row[5],
+                'from_username': from_username,
+                'to_username': to_username
+            })
+    except Exception as e:
+        print(f"❌ Ошибка получения отзывов пользователя {user_id}: {e}")
+    finally:
+        conn.close()
+    
+    return reps
+
+def get_db_stats():
+    """Статистика базы данных""" # 🆕
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    stats = {}
+    try:
+        cursor.execute('SELECT COUNT(*) FROM users')
+        stats['total_users'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM reputation')
+        stats['total_reputations'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM reputation WHERE text LIKE "+%" OR text LIKE "%+rep%" OR text LIKE "%+реп%"')
+        stats['positive_reps'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM reputation WHERE text LIKE "-%" OR text LIKE "%-rep%" OR text LIKE "%-реп%"')
+        stats['negative_reps'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(DISTINCT from_user) FROM reputation')
+        stats['unique_senders'] = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(DISTINCT to_user) FROM reputation')
+        stats['unique_receivers'] = cursor.fetchone()[0]
+        
+    except Exception as e:
+        print(f"❌ Ошибка получения статистики: {e}")
+    finally:
+        conn.close()
+    
+    return stats
+
 def get_user_info(user_id):
     """Получаем информацию о пользователе"""
     conn = get_db_connection()
@@ -374,12 +532,20 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
+# ========== АДМИН ПАНЕЛЬ ========== 🆕
 async def start(update: Update, context: CallbackContext) -> None:
     """Команда /start в личных сообщениях"""
     user_id = update.effective_user.id
     username = update.effective_user.username or ""
     
     save_user(user_id, username)
+    
+    # Показываем клавиатуру админам
+    if user_id in ADMINS:
+        await update.message.reply_text(
+            "🪄 Клавиатура админа активирована.",
+            reply_markup=get_admin_keyboard()
+        )
     
     if context.args and context.args[0].startswith('view_'):
         try:
@@ -417,6 +583,326 @@ ID - [{user_id}]
         print(f"❌ Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
+async def handle_admin_panel(update: Update, context: CallbackContext) -> None:
+    """Обработка кнопки админ-панели"""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    text = "🪄 АДМИН ПАНЕЛЬ\n\nВыберите действие:"
+    
+    await update.message.reply_text(
+        text,
+        reply_markup=get_admin_menu_keyboard()
+    )
+
+async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
+    """Обработка меню админ-панели"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    if text == "Главное меню":
+        # Возвращаемся к главной клавиатуре админа
+        await update.message.reply_text(
+            "🪄 Возврат в главное меню",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+    
+    if text == "Удалить отзыв":
+        context.user_data['admin_action'] = 'delete_rep'
+        await update.message.reply_text(
+            "🪄 Введите ID отзыва для удаления:\n\n(или отправьте ❌ Отмена)",
+            reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+        )
+        return
+    
+    if text == "Все отзывы":
+        reps = get_all_reputations(limit=20)
+        if not reps:
+            await update.message.reply_text("🪄 Отзывов пока нет", reply_markup=get_admin_menu_keyboard())
+            return
+        
+        message = "🪄 Последние 20 отзывов:\n\n"
+        for rep in reps:
+            rep_type = get_reputation_type(rep["text"])
+            emoji = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "📝"
+            short_text = rep['text'][:50] + "..." if len(rep['text']) > 50 else rep['text']
+            date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
+            
+            message += f"{emoji} ID{rep['id']}: {rep['from_username']} → {rep['to_username']}\n"
+            message += f"   📝 {short_text}\n"
+            message += f"   📅 {date}\n\n"
+        
+        message += "\n🪄 Для удаления введите команду: Удалить отзыв"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    if text == "Поиск по ID":
+        context.user_data['admin_action'] = 'search_user_id'
+        await update.message.reply_text(
+            "🪄 Введите ID пользователя для поиска всех его отзывов:\n\n(или отправьте ❌ Отмена)",
+            reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+        )
+        return
+    
+    if text == "Статистика":
+        stats = get_db_stats()
+        message = f"""🪄 СТАТИСТИКА БАЗЫ ДАННЫХ
+
+👥 Пользователей: {stats.get('total_users', 0)}
+📝 Всего отзывов: {stats.get('total_reputations', 0)}
+✅ Положительных: {stats.get('positive_reps', 0)}
+❌ Отрицательных: {stats.get('negative_reps', 0)}
+📤 Отправителей: {stats.get('unique_senders', 0)}
+📥 Получателей: {stats.get('unique_receivers', 0)}"""
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    if text == "Экспорт":
+        await update.message.reply_text(
+            "🪄 Экспорт в разработке...",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    if text == "Просмотр":
+        context.user_data['admin_action'] = 'view_rep'
+        await update.message.reply_text(
+            "🪄 Введите ID отзыва для просмотра:\n\n(или отправьте ❌ Отмена)",
+            reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+        )
+        return
+
+async def handle_admin_input(update: Update, context: CallbackContext) -> None:
+    """Обработка ввода от админа"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    if text == "❌ Отмена":
+        await update.message.reply_text(
+            "🪄 Отменено",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('rep_to_delete', None)
+        return
+    
+    action = context.user_data.get('admin_action')
+    
+    if not action:
+        # Если нет активного действия, возвращаем в меню
+        await update.message.reply_text(
+            "🪄 Выберите действие в меню:",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    if action == 'delete_rep':
+        if 'rep_to_delete' not in context.user_data:
+            # Первый шаг: получение ID
+            if not text.isdigit():
+                await update.message.reply_text("❌ Введите числовой ID отзыва")
+                return
+            
+            rep_id = int(text)
+            rep_data = get_reputation_by_id(rep_id)
+            
+            if not rep_data:
+                await update.message.reply_text("❌ Отзыв не найден")
+                return
+            
+            # Сохраняем данные отзыва и показываем подтверждение
+            context.user_data['rep_to_delete'] = rep_data
+            
+            rep_type = get_reputation_type(rep_data["text"])
+            type_text = "✅ ПОЛОЖИТЕЛЬНЫЙ" if rep_type == '+' else "❌ ОТРИЦАТЕЛЬНЫЙ"
+            date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
+            
+            message = f"""🪄 Отзыв #{rep_id} ({type_text})
+
+👤 От: {rep_data['from_username']}
+🎯 Кому: id{rep_data['to_user']}
+📅 Дата: {date}
+📝 Текст: {rep_data['text'][:100]}...
+
+Удалить этот отзыв?"""
+            
+            await update.message.reply_text(
+                message,
+                reply_markup=ReplyKeyboardMarkup([
+                    ['✅ Да, удалить', '❌ Нет']
+                ], resize_keyboard=True)
+            )
+        
+        else:
+            # Второй шаг: подтверждение удаления
+            if text == "✅ Да, удалить":
+                rep_data = context.user_data['rep_to_delete']
+                rep_id = rep_data['id']
+                
+                if delete_reputation_by_id(rep_id):
+                    message = f"✅ Отзыв #{rep_id} успешно удален"
+                else:
+                    message = f"❌ Ошибка при удалении отзыва #{rep_id}"
+                
+                await update.message.reply_text(
+                    message,
+                    reply_markup=get_admin_menu_keyboard()
+                )
+                
+                # Очищаем данные
+                context.user_data.pop('rep_to_delete', None)
+                context.user_data.pop('admin_action', None)
+            
+            elif text == "❌ Нет":
+                await update.message.reply_text(
+                    "🪄 Удаление отменено",
+                    reply_markup=get_admin_menu_keyboard()
+                )
+                context.user_data.pop('rep_to_delete', None)
+                context.user_data.pop('admin_action', None)
+    
+    elif action == 'search_user_id':
+        if not text.isdigit():
+            await update.message.reply_text("❌ Введите числовой ID пользователя")
+            return
+        
+        target_id = int(text)
+        reps = get_reputations_by_user_id(target_id)
+        
+        if not reps:
+            await update.message.reply_text(f"🪄 У пользователя ID{target_id} нет отзывов", reply_markup=get_admin_menu_keyboard())
+            return
+        
+        message = f"🪄 Отзывы пользователя ID{target_id}:\n\n"
+        
+        for rep in reps[:15]:  # Ограничим 15 отзывами
+            rep_type = get_reputation_type(rep["text"])
+            emoji = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "📝"
+            short_text = rep['text'][:40] + "..." if len(rep['text']) > 40 else rep['text']
+            date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
+            
+            direction = f"{rep['from_username']} → {rep['to_username']}"
+            if rep['from_user'] == target_id:
+                direction = f"👤 Отправил → {rep['to_username']}"
+            else:
+                direction = f"👤 Получил от {rep['from_username']}"
+            
+            message += f"{emoji} ID{rep['id']}: {direction}\n"
+            message += f"   📝 {short_text}\n"
+            message += f"   📅 {date}\n\n"
+        
+        if len(reps) > 15:
+            message += f"\n... и еще {len(reps) - 15} отзывов"
+        
+        message += "\n🪄 Для удаления используйте 'Удалить отзыв'"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('admin_action', None)
+    
+    elif action == 'view_rep':
+        if not text.isdigit():
+            await update.message.reply_text("❌ Введите числовой ID отзыва")
+            return
+        
+        rep_id = int(text)
+        rep_data = get_reputation_by_id(rep_id)
+        
+        if not rep_data:
+            await update.message.reply_text("❌ Отзыв не найден", reply_markup=get_admin_menu_keyboard())
+            return
+        
+        rep_type = get_reputation_type(rep_data["text"])
+        type_text = "✅ ПОЛОЖИТЕЛЬНЫЙ" if rep_type == '+' else "❌ ОТРИЦАТЕЛЬНЫЙ"
+        date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
+        
+        message = f"""🪄 Отзыв #{rep_id} ({type_text})
+
+👤 От: {rep_data['from_username']}
+🎯 Кому: id{rep_data['to_user']}
+📅 Дата: {date}
+📝 Текст: {rep_data['text']}
+
+🪄 Действия:"""
+        
+        keyboard = [
+            ['🗑 Удалить этот отзыв', '🔙 Назад в меню'],
+            ['❌ Отмена']
+        ]
+        
+        # Сохраняем ID для возможного удаления
+        context.user_data['viewing_rep_id'] = rep_id
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+async def handle_admin_actions(update: Update, context: CallbackContext) -> None:
+    """Обработка действий в режиме просмотра"""
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    if text == "🔙 Назад в меню":
+        await update.message.reply_text(
+            "🪄 Возврат в меню",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('viewing_rep_id', None)
+        return
+    
+    if text == "🗑 Удалить этот отзыв":
+        rep_id = context.user_data.get('viewing_rep_id')
+        if not rep_id:
+            await update.message.reply_text("❌ ID отзыва не найден")
+            return
+        
+        if delete_reputation_by_id(rep_id):
+            message = f"✅ Отзыв #{rep_id} успешно удален"
+        else:
+            message = f"❌ Ошибка при удалении отзыва #{rep_id}"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('viewing_rep_id', None)
+        return
+    
+    if text == "❌ Отмена":
+        await update.message.reply_text(
+            "🪄 Отменено",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('viewing_rep_id', None)
+
+# ========== ОСТАЛЬНОЙ КОД (без изменений) ==========
 async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
     """Показать профиль пользователя с кнопками при переходе из чата"""
     user_info = get_user_info(target_user_id)
@@ -465,7 +951,6 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
         print(f"❌ Ошибка отправки фото: {e}")
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
-# ========== ОБНОВЛЕННЫЕ ФУНКЦИИ ДЛЯ ПРОСМОТРА СКРИНОВ ==========
 async def show_reputation_photo(update: Update, rep_id: int, back_context: str, context: CallbackContext) -> None:
     """Показать фото отзыва с информацией (редактируем текущее сообщение)"""
     query = update.callback_query
@@ -982,7 +1467,7 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
 
 async def handle_old_button_logic(query, context):
     """Старая логика для кнопок (оставлена для совместимости)"""
-    # ... существующий код обработки остальных кнопок ...
+    pass
 
 async def show_profile_pm(query, user_id, is_own_profile=True):
     """Показать профиль в личных сообщениях (с фото)"""
@@ -1081,7 +1566,38 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     if not update.message:
         return
     
-    # Сохраняем всех пользователей
+    user_id = update.effective_user.id
+    
+    # 🆕 ПРОВЕРКА АДМИНСКИХ КОМАНД
+    if update.message.chat.type == 'private' and user_id in ADMINS:
+        text = update.message.text or ""
+        
+        # Обработка кнопки админ-панели
+        if text == "🪄 АДМИН ПАНЕЛЬ":
+            await handle_admin_panel(update, context)
+            return
+        
+        # Обработка меню админ-панели
+        admin_menu_commands = [
+            "Удалить отзыв", "Все отзывы", "Поиск по ID",
+            "Статистика", "Экспорт", "Просмотр", "Главное меню",
+            "✅ Да, удалить", "❌ Нет", "❌ Отмена",
+            "🗑 Удалить этот отзыв", "🔙 Назад в меню"
+        ]
+        
+        if text in admin_menu_commands:
+            if text in ["✅ Да, удалить", "❌ Нет", "🗑 Удалить этот отзыв", "🔙 Назад в меню", "❌ Отмена"]:
+                await handle_admin_actions(update, context)
+            else:
+                await handle_admin_menu(update, context)
+            return
+        
+        # Обработка ввода админа (ID и т.д.)
+        if 'admin_action' in context.user_data or 'viewing_rep_id' in context.user_data:
+            await handle_admin_input(update, context)
+            return
+    
+    # Сохраняем всех пользователей (оригинальная логика)
     if update.message.from_user:
         save_user(update.message.from_user.id, update.message.from_user.username or "")
     
@@ -1370,6 +1886,7 @@ def main():
     print(f"✅ Токен: {'Установлен' if TOKEN else 'Отсутствует!'}")
     print(f"✅ DATABASE_URL: {'Установлен' if DATABASE_URL else 'Отсутствует!'}")
     print(f"✅ URL фото: {PHOTO_URL}")
+    print(f"✅ Админы: {len(ADMINS)} пользователей") # 🆕
     
     # Инициализация БД
     init_db()
@@ -1388,8 +1905,12 @@ def main():
     # Обработчики кнопок
     app.add_handler(CallbackQueryHandler(button_handler))
     
+    # 🆕 Обработчик текстовых сообщений (для админ-панели)
+    # Должен быть ВЫШЕ общего обработчика, чтобы перехватывать команды
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_all_messages), group=0)
+    
     # Обработчик ВСЕХ сообщений (включая группы)
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all_messages))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all_messages), group=1)
     
     print("=" * 60)
     print("🚀 Бот запускается...")
