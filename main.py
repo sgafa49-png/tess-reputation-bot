@@ -674,7 +674,7 @@ class SimpleBackup:
             context.user_data.pop('restore_file', None)
             return
         
-        msg = await update.message.reply_text("Восстановление...")
+        msg = await message.reply_text("Восстановление...")
         
         try:
             # Распаковываем
