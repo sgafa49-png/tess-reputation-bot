@@ -41,6 +41,7 @@ def get_admin_menu_keyboard():
     return ReplyKeyboardMarkup([
         ['Удалить отзыв'],
         ['Статистика', 'Рассылка'],
+        ['Топ по репутации'],
         ['Резервное копирование'],
         ['Главное меню']
     ], resize_keyboard=True, one_time_keyboard=False)
@@ -52,6 +53,14 @@ def get_backup_menu_keyboard():
         ['Показать бэкапы', 'Восстановить'],
         ['Автоочистка'],
         ['Назад в админ-панель']
+    ], resize_keyboard=True, one_time_keyboard=False)
+
+def get_top_menu_keyboard():
+    """Меню топов"""
+    return ReplyKeyboardMarkup([
+        ['Топ за день', 'Топ за неделю'],
+        ['Топ за месяц', 'Топ за всё время'],
+        ['Топ за N дней', 'Назад в админ-панель']
     ], resize_keyboard=True, one_time_keyboard=False)
 
 # ========== КОНСТАНТЫ ДЛЯ РЕПУТАЦИИ ==========
@@ -460,6 +469,101 @@ def get_last_negative(user_id):
             return rep
     return None
 
+# ========== ФУНКЦИИ ДЛЯ ТОПОВ ==========
+def get_top_users_by_period(days=None, limit=10):
+    """Получить топ пользователей по количеству отзывов за период"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if days:
+            # За указанное количество дней
+            date_filter = f"WHERE r.created_at >= NOW() - INTERVAL '{days} days'"
+        else:
+            # За всё время
+            date_filter = ""
+        
+        query = f"""
+            SELECT u.user_id, u.username, 
+                   COUNT(r.id) as rep_count,
+                   SUM(CASE WHEN r.text LIKE '%%+%%' OR r.text LIKE '%%+rep%%' OR r.text LIKE '%%+реп%%' THEN 1 ELSE 0 END) as positive_count,
+                   SUM(CASE WHEN r.text LIKE '%%-%%' OR r.text LIKE '%%-rep%%' OR r.text LIKE '%%-реп%%' THEN 1 ELSE 0 END) as negative_count
+            FROM users u
+            LEFT JOIN reputation r ON u.user_id = r.to_user
+            {date_filter}
+            GROUP BY u.user_id, u.username
+            HAVING COUNT(r.id) > 0
+            ORDER BY rep_count DESC
+            LIMIT {limit}
+        """
+        
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        
+        result = []
+        for i, row in enumerate(rows, 1):
+            result.append({
+                'rank': i,
+                'user_id': row[0],
+                'username': row[1] or f"id{row[0]}",
+                'total_reps': row[2],
+                'positive': row[3],
+                'negative': row[4],
+                'percentage': (row[3] / row[2] * 100) if row[2] > 0 else 0
+            })
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ Ошибка получения топа: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_daily_top(limit=10):
+    """Топ за день"""
+    return get_top_users_by_period(days=1, limit=limit)
+
+def get_weekly_top(limit=10):
+    """Топ за неделю"""
+    return get_top_users_by_period(days=7, limit=limit)
+
+def get_monthly_top(limit=10):
+    """Топ за месяц"""
+    return get_top_users_by_period(days=30, limit=limit)
+
+def get_all_time_top(limit=10):
+    """Топ за всё время"""
+    return get_top_users_by_period(days=None, limit=limit)
+
+def format_top_message(top_data, period_name):
+    """Форматировать сообщение с топом"""
+    if not top_data:
+        return f"📊 <b>Топ за {period_name}</b>\n\n📭 Данных пока нет"
+    
+    message = f"🏆 <b>ТОП ПО РЕПУТАЦИИ</b>\n📅 <i>{period_name}</i>\n\n"
+    
+    for user in top_data:
+        medal = ""
+        if user['rank'] == 1:
+            medal = "🥇"
+        elif user['rank'] == 2:
+            medal = "🥈"
+        elif user['rank'] == 3:
+            medal = "🥉"
+        else:
+            medal = f"{user['rank']}."
+        
+        username_display = f"@{user['username']}" if user['username'] and not user['username'].startswith('id') else user['username']
+        
+        message += f"{medal} {username_display}\n"
+        message += f"   📊 Всего: {user['total_reps']} отзывов\n"
+        message += f"   ✅ Положительных: {user['positive']} ({user['percentage']:.0f}%)\n"
+        message += f"   ❌ Отрицательных: {user['negative']}\n"
+        message += f"   🆔 ID: {user['user_id']}\n\n"
+    
+    return message
+
 # ========== РЕЗЕРВНОЕ КОПИРОВАНИЕ ==========
 class SimpleBackup:
     def __init__(self):
@@ -635,7 +739,7 @@ class SimpleBackup:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # Для инлайн1-режима нужно редактировать сообщение
+            # Для инлайн-режима нужно редактировать сообщение
             if update.callback_query:
                 await update.callback_query.edit_message_text(
                     f"Восстановить из:\n{filename}\n"
@@ -938,10 +1042,18 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         context.user_data.pop('rep_to_delete', None)
         context.user_data.pop('broadcast_text', None)
         
-        await update.message.reply_text(
-            "Отменено",
-            reply_markup=get_admin_menu_keyboard()
-        )
+        # Определяем, откуда была отмена
+        if 'waiting_days_input' in context.user_data:
+            context.user_data.pop('admin_action', None)
+            await update.message.reply_text(
+                "Отменено",
+                reply_markup=get_top_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "Отменено",
+                reply_markup=get_admin_menu_keyboard()
+            )
         return
     
     if text == "Главное меню":
@@ -1025,6 +1137,63 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(
             "Введите текст для рассылки всем пользователям:\n\n(или отправьте ❌ Отмена)",
             reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+        )
+        return
+    
+    if text == "Топ по репутации":
+        await update.message.reply_text(
+            "📊 <b>Топы по репутации</b>\n\nВыберите период:",
+            reply_markup=get_top_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+    
+    if text == "Топ за день":
+        top_data = get_daily_top(limit=15)
+        message = format_top_message(top_data, "за день")
+        await update.message.reply_text(
+            message,
+            reply_markup=get_top_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+    
+    if text == "Топ за неделю":
+        top_data = get_weekly_top(limit=15)
+        message = format_top_message(top_data, "за неделю")
+        await update.message.reply_text(
+            message,
+            reply_markup=get_top_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+    
+    if text == "Топ за месяц":
+        top_data = get_monthly_top(limit=15)
+        message = format_top_message(top_data, "за месяц")
+        await update.message.reply_text(
+            message,
+            reply_markup=get_top_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+    
+    if text == "Топ за всё время":
+        top_data = get_all_time_top(limit=15)
+        message = format_top_message(top_data, "за всё время")
+        await update.message.reply_text(
+            message,
+            reply_markup=get_top_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        return
+    
+    if text == "Топ за N дней":
+        context.user_data['admin_action'] = 'waiting_days_input'
+        await update.message.reply_text(
+            "🔢 <b>Введите количество дней:</b>\n\nНапример: 5, 10, 100\n(или отправьте ❌ Отмена)",
+            reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True),
+            parse_mode='HTML'
         )
         return
     
@@ -1158,6 +1327,64 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
                 ['✅ Да, отправить', '❌ Нет, отменить']
             ], resize_keyboard=True)
         )
+    
+    elif action == 'waiting_days_input':
+        if not text.isdigit():
+            await update.message.reply_text("❌ Введите число (например: 5, 30, 100)")
+            return
+        
+        days = int(text)
+        
+        if days <= 0:
+            await update.message.reply_text("❌ Число должно быть больше 0")
+            return
+        
+        if days > 3650:  # 10 лет максимум
+            await update.message.reply_text("❌ Максимум 3650 дней (10 лет)")
+            return
+        
+        top_data = get_top_users_by_period(days=days, limit=15)
+        
+        if not top_data:
+            await update.message.reply_text(
+                f"📊 <b>Топ за {days} дней</b>\n\n📭 За этот период нет отзывов",
+                reply_markup=get_top_menu_keyboard(),
+                parse_mode='HTML'
+            )
+        else:
+            message = f"<b>📊 ТОП ПО РЕПУТАЦИИ</b>\n"
+            message += f"<i>За последние {days} дней</i>\n\n"
+            
+            for i, user in enumerate(top_data[:10], 1):
+                medal = ""
+                if i == 1:
+                    medal = "🥇"
+                elif i == 2:
+                    medal = "🥈"
+                elif i == 3:
+                    medal = "🥉"
+                else:
+                    medal = f"{i}."
+                
+                username_display = f"@{user['username']}" if user['username'] and not user['username'].startswith('id') else user['username']
+                
+                message += f"{medal} {username_display}\n"
+                message += f"   📊 Всего: {user['total_reps']} отз.\n"
+                message += f"   ✅ Положительных: {user['positive']} ({user['percentage']:.0f}%)\n"
+                message += f"   🆔 ID: {user['user_id']}\n\n"
+            
+            if len(top_data) > 10:
+                message += f"... и еще {len(top_data) - 10} пользователей"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_top_menu_keyboard(),
+            parse_mode='HTML'
+        )
+        
+        # Очищаем состояние
+        context.user_data.pop('admin_action', None)
+        return
 
 async def show_user_reputations_for_deletion(update: Update, user_id: int):
     """Показать отзывы пользователя с кнопками удаления"""
@@ -1986,7 +2213,9 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
             "Создать бэкап", "Показать бэкапы", "Восстановить", "Автоочистка",
             "✅ Да, удалить", "❌ Нет", "❌ Отмена",
             "✅ Да, отправить", "❌ Нет, отменить",
-            "✅ Да, восстановить", "❌ Нет, отменить"
+            "✅ Да, восстановить", "❌ Нет, отменить",
+            "Топ по репутации", "Топ за день", "Топ за неделю", "Топ за месяц",
+            "Топ за всё время", "Топ за N дней"
         ]
         
         if text in admin_menu_commands:
