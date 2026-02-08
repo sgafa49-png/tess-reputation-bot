@@ -41,9 +41,17 @@ def get_admin_menu_keyboard():
     return ReplyKeyboardMarkup([
         ['Удалить отзыв'],
         ['Статистика', 'Рассылка'],
-        ['Создать бэкап', 'Восстановить'],
-        ['Автоочистка'],
+        ['Резервное копирование'],
         ['Главное меню']
+    ], resize_keyboard=True, one_time_keyboard=False)
+
+def get_backup_menu_keyboard():
+    """Меню резервного копирования"""
+    return ReplyKeyboardMarkup([
+        ['Создать бэкап'],
+        ['Показать бэкапы', 'Восстановить'],
+        ['Автоочистка'],
+        ['Назад в админ-панель']
     ], resize_keyboard=True, one_time_keyboard=False)
 
 # ========== КОНСТАНТЫ ДЛЯ РЕПУТАЦИИ ==========
@@ -174,7 +182,7 @@ def save_reputation(from_user, from_username, to_user, to_username, text, photo_
     finally:
         conn.close()
 
-def get_all_users():  # 🆕 ФУНКЦИЯ ДЛЯ РАССЫЛКИ
+def get_all_users():
     """Получить всех пользователей из БД"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -285,7 +293,7 @@ def delete_reputation_by_id(rep_id):
         conn.close()
 
 def get_reputations_by_user_id(user_id):
-    """Получить все отзывы пользователя (по from_user или to_user)"""
+    """Получить все отзывы пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -473,67 +481,45 @@ class SimpleBackup:
             filename = f"backup_{timestamp}.sql.gz"
             filepath = os.path.join(self.backup_dir, filename)
             
-            # 🆕 ОТЛАДКА
-            print(f"\n{'='*60}")
-            print(f"🔍 Начинаю создание бэкапа")
-            print(f"🔍 DATABASE_URL: {DATABASE_URL[:50]}...")
-            
             cmd = f'pg_dump "{DATABASE_URL}" | gzip > "{filepath}"'
-            print(f"🔍 Выполняю команду: {cmd[:100]}...")
-            
             env = os.environ.copy()
             result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=300)
             
-            print(f"🔍 Код возврата: {result.returncode}")
-            if result.stdout:
-                print(f"🔍 Вывод: {result.stdout[:200]}")
-            if result.stderr:
-                print(f"🔍 Ошибки: {result.stderr[:200]}")
-            
             if result.returncode == 0:
-                if not os.path.exists(filepath):
-                    await msg.edit_text("❌ Файл бэкапа не создан")
-                    print(f"🔍 Файл не создан!")
-                    return
-                
-                size_bytes = os.path.getsize(filepath)
-                size_mb = size_bytes / (1024 * 1024)
-                
-                print(f"🔍 Размер файла: {size_bytes} байт ({size_mb:.2f} MB)")
-                
-                if size_bytes < 100:
+                if os.path.exists(filepath):
+                    size_bytes = os.path.getsize(filepath)
+                    size_mb = size_bytes / (1024 * 1024)
+                    
+                    if size_bytes < 100:
+                        await msg.edit_text(
+                            f"ОШИБКА: Файл бэкапа почти пустой!\n"
+                            f"Размер: {size_bytes} байт\n"
+                            f"Ошибка pg_dump: {result.stderr[:200] if result.stderr else 'неизвестно'}"
+                        )
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                        return
+                    
                     await msg.edit_text(
-                        f"⚠️ ОШИБКА: Файл бэкапа почти пустой!\n"
-                        f"Размер: {size_bytes} байт\n\n"
-                        f"Ошибка pg_dump:\n{result.stderr[:200] if result.stderr else 'неизвестно'}"
+                        f"Бэкап создан\n"
+                        f"Файл: {filename}\n"
+                        f"Размер: {size_mb:.2f} MB\n"
+                        f"Дата: {datetime.now().strftime('%d.%m %H:%M')}",
+                        reply_markup=get_backup_menu_keyboard()
                     )
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                    return
-                
-                await msg.edit_text(
-                    f"✅ Бэкап создан\n"
-                    f"Файл: {filename}\n"
-                    f"Размер: {size_mb:.2f} MB\n"
-                    f"Дата: {datetime.now().strftime('%d.%m %H:%M')}"
-                )
-                print(f"✅ Бэкап успешно создан: {filename} ({size_mb:.2f} MB)")
+                else:
+                    await msg.edit_text("ОШИБКА: Файл бэкапа не создан")
             else:
                 error_msg = result.stderr[:300] if result.stderr else "Неизвестная ошибка"
-                await msg.edit_text(f"❌ Ошибка создания бэкапа:\n{error_msg}")
-                print(f"❌ Ошибка создания бэкапа: {error_msg}")
-            
-            print(f"{'='*60}\n")
+                await msg.edit_text(f"ОШИБКА создания бэкапа:\n{error_msg}")
                 
         except subprocess.TimeoutExpired:
-            await msg.edit_text("❌ Таймаут: операция заняла слишком много времени")
-            print("❌ Таймаут при создании бэкапа")
+            await msg.edit_text("Таймаут: операция заняла слишком много времени")
         except Exception as e:
-            await msg.edit_text(f"❌ Неожиданная ошибка: {str(e)[:150]}")
-            print(f"❌ Исключение в create_backup: {e}")
+            await msg.edit_text(f"Неожиданная ошибка: {str(e)[:150]}")
     
     async def show_backups(self, update: Update, context: CallbackContext):
-        """Показать список доступных бэкапов"""
+        """Показать список доступных бэкапов с кнопками"""
         user_id = update.effective_user.id
         
         if user_id not in ADMINS:
@@ -544,22 +530,33 @@ class SimpleBackup:
         backups.sort(key=os.path.getmtime, reverse=True)
         
         if not backups:
-            await update.message.reply_text("Бэкапов нет")
+            await update.message.reply_text("Бэкапов нет", reply_markup=get_backup_menu_keyboard())
             return
         
         text = "Доступные бэкапы:\n\n"
+        keyboard = []
+        
         for i, backup in enumerate(backups[:5], 1):
             name = os.path.basename(backup)[7:-7]
             size = os.path.getsize(backup) / (1024 * 1024)
             date = datetime.fromtimestamp(os.path.getmtime(backup)).strftime('%d.%m %H:%M')
             text += f"{i}. {name} ({size:.1f} MB) - {date}\n"
+            
+            # Добавляем инлайн-кнопку для каждого бэкапа
+            keyboard.append([InlineKeyboardButton(
+                f"Восстановить {i}", 
+                callback_data=f"restore_{i}"
+            )])
         
-        text += "\nВведите номер для восстановления:"
+        # Добавляем кнопку "Отмена"
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="backup_cancel")])
         
-        await update.message.reply_text(text)
-        context.user_data['awaiting_backup_choice'] = True
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(text, reply_markup=reply_markup)
+        
+        context.user_data['backups_list'] = backups
     
-    async def restore_backup(self, update: Update, context: CallbackContext):
+    async def restore_backup(self, update: Update, context: CallbackContext, backup_index=None):
         """Восстановить базу из бэкапа"""
         user_id = update.effective_user.id
         
@@ -567,35 +564,43 @@ class SimpleBackup:
             await update.message.reply_text("❌ Доступ запрещен")
             return
         
-        choice = update.message.text.strip()
-        
-        if not choice.isdigit():
-            await update.message.reply_text("❌ Введите номер бэкапа")
+        if backup_index is not None:
+            # Вызвано из инлайн-кнопки
+            backups = context.user_data.get('backups_list', [])
+            idx = backup_index - 1
+            
+            if idx < 0 or idx >= len(backups):
+                await update.message.reply_text("❌ Неверный номер", reply_markup=get_backup_menu_keyboard())
+                return
+            
+            backup_file = backups[idx]
+            context.user_data['restore_file'] = backup_file
+            
+            filename = os.path.basename(backup_file)
+            size = os.path.getsize(backup_file) / (1024 * 1024)
+            date = datetime.fromtimestamp(os.path.getmtime(backup_file)).strftime('%d.%m %H:%M')
+            
+            keyboard = ReplyKeyboardMarkup([
+                ['✅ Да, восстановить'],
+                ['❌ Нет, отменить']
+            ], resize_keyboard=True)
+            
+            await update.message.reply_text(
+                f"Восстановить из:\n{filename}\n"
+                f"Размер: {size:.1f} MB\n"
+                f"Дата: {date}\n\n"
+                f"Все текущие данные будут перезаписаны!",
+                reply_markup=keyboard
+            )
             return
         
-        backups = glob.glob(os.path.join(self.backup_dir, "*.sql.gz"))
-        backups.sort(key=os.path.getmtime, reverse=True)
-        
-        idx = int(choice) - 1
-        if idx < 0 or idx >= len(backups):
-            await update.message.reply_text("❌ Неверный номер")
+        # Если вызвано из текстового меню
+        if not context.user_data.get('backups_list'):
+            await update.message.reply_text(
+                "Сначала просмотрите список бэкапов",
+                reply_markup=get_backup_menu_keyboard()
+            )
             return
-        
-        backup_file = backups[idx]
-        filename = os.path.basename(backup_file)
-        
-        keyboard = ReplyKeyboardMarkup([
-            ['Да, восстановить'],
-            ['Нет, отменить']
-        ], resize_keyboard=True)
-        
-        await update.message.reply_text(
-            f"Восстановить из:\n{filename}?",
-            reply_markup=keyboard
-        )
-        
-        context.user_data['restore_file'] = backup_file
-        context.user_data['admin_action'] = 'confirm_restore'
     
     async def perform_restore(self, update: Update, context: CallbackContext):
         """Выполнить восстановление базы"""
@@ -603,11 +608,10 @@ class SimpleBackup:
         
         if not backup_file or not os.path.exists(backup_file):
             await update.message.reply_text(
-                "❌ Файл бэкапа не найден",
-                reply_markup=get_admin_menu_keyboard()
+                "Файл бэкапа не найден",
+                reply_markup=get_backup_menu_keyboard()
             )
             context.user_data.pop('restore_file', None)
-            context.user_data.pop('admin_action', None)
             return
         
         msg = await update.message.reply_text("Восстановление...")
@@ -615,75 +619,101 @@ class SimpleBackup:
         try:
             cmd = f'gunzip -c "{backup_file}" | psql "{DATABASE_URL}"'
             
-            print(f"\n{'='*60}")
-            print(f"🔍 Начинаю восстановление из {backup_file}")
-            print(f"🔍 Команда: {cmd[:100]}...")
-            
             env = os.environ.copy()
             result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=600)
             
-            print(f"🔍 Код возврата: {result.returncode}")
-            if result.stderr:
-                print(f"🔍 Ошибки восстановления: {result.stderr[:200]}")
-            
             if result.returncode == 0:
                 await msg.edit_text(
-                    "✅ База восстановлена",
-                    reply_markup=get_admin_menu_keyboard()
+                    "База восстановлена",
+                    reply_markup=get_backup_menu_keyboard()
                 )
-                print(f"✅ Восстановление успешно завершено")
             else:
                 error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
                 await msg.edit_text(
-                    f"❌ Ошибка:\n{error_msg}",
-                    reply_markup=get_admin_menu_keyboard()
+                    f"Ошибка:\n{error_msg}",
+                    reply_markup=get_backup_menu_keyboard()
                 )
-                print(f"❌ Ошибка восстановления: {error_msg}")
-            
-            print(f"{'='*60}\n")
                 
         except subprocess.TimeoutExpired:
             await msg.edit_text(
-                "❌ Таймаут: восстановление заняло слишком много времени",
-                reply_markup=get_admin_menu_keyboard()
+                "Таймаут: восстановление заняло слишком много времени",
+                reply_markup=get_backup_menu_keyboard()
             )
-            print("❌ Таймаут при восстановлении")
         except Exception as e:
             await msg.edit_text(
-                f"❌ Ошибка: {str(e)[:150]}",
-                reply_markup=get_admin_menu_keyboard()
+                f"Ошибка: {str(e)[:150]}",
+                reply_markup=get_backup_menu_keyboard()
             )
-            print(f"❌ Исключение при восстановлении: {e}")
         
         context.user_data.pop('restore_file', None)
-        context.user_data.pop('admin_action', None)
+        context.user_data.pop('backups_list', None)
     
-    def _cleanup_old_backups(self):
-        """Очистка старых бэкапов - оставить только 1 последний"""
+    async def auto_cleanup(self, update: Update, context: CallbackContext):
+        """Автоочистка старых бэкапов"""
+        user_id = update.effective_user.id
+        
+        if user_id not in ADMINS:
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        
         try:
             backups = glob.glob(os.path.join(self.backup_dir, "*.sql.gz"))
             backups.sort(key=os.path.getmtime, reverse=True)
             
-            if len(backups) > 1:
-                deleted_count = 0
-                freed_space = 0
+            if len(backups) <= 1:
+                await update.message.reply_text(
+                    "Нет старых бэкапов для очистки",
+                    reply_markup=get_backup_menu_keyboard()
+                )
+                return
+            
+            deleted_count = 0
+            freed_space = 0
+            
+            for old_backup in backups[1:]:
+                try:
+                    size = os.path.getsize(old_backup)
+                    os.remove(old_backup)
+                    deleted_count += 1
+                    freed_space += size
+                except:
+                    pass
+            
+            if deleted_count > 0:
+                freed_mb = freed_space / (1024 * 1024)
                 
-                for old_backup in backups[1:]:
-                    try:
-                        size = os.path.getsize(old_backup)
-                        os.remove(old_backup)
-                        deleted_count += 1
-                        freed_space += size
-                        print(f"🗑️ Удален старый бэкап: {os.path.basename(old_backup)}")
-                    except:
-                        pass
-                
-                if deleted_count > 0:
-                    freed_mb = freed_space / (1024 * 1024)
-                    print(f"✅ Автоочистка: удалено {deleted_count} файлов, освобождено {freed_mb:.1f} MB")
+                # Получаем информацию об оставшемся бэкапе
+                remaining_backup = backups[0] if backups else None
+                if remaining_backup and os.path.exists(remaining_backup):
+                    remaining_size = os.path.getsize(remaining_backup) / (1024 * 1024)
+                    remaining_name = os.path.basename(remaining_backup)
                     
+                    await update.message.reply_text(
+                        f"Автоочистка выполнена\n\n"
+                        f"Удалено: {deleted_count} файлов\n"
+                        f"Освобождено: {freed_mb:.1f} MB\n\n"
+                        f"Оставлен бэкап:\n"
+                        f"{remaining_name} ({remaining_size:.1f} MB)",
+                        reply_markup=get_backup_menu_keyboard()
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"Автоочистка выполнена\n\n"
+                        f"Удалено: {deleted_count} файлов\n"
+                        f"Освобождено: {freed_mb:.1f} MB",
+                        reply_markup=get_backup_menu_keyboard()
+                    )
+            else:
+                await update.message.reply_text(
+                    "Не удалось удалить старые бэкапы",
+                    reply_markup=get_backup_menu_keyboard()
+                )
+                
         except Exception as e:
-            print(f"⚠️ Ошибка автоочистки: {e}")
+            await update.message.reply_text(
+                f"Ошибка автоочистки: {str(e)[:100]}",
+                reply_markup=get_backup_menu_keyboard()
+            )
 
 # Создаем глобальный объект для бэкапов
 backup_manager = SimpleBackup()
@@ -712,7 +742,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
                 target_user_id = user_info['user_id']
                 target_username = user_info['username'] or f"id{target_user_id}"
             else:
-                await update.message.reply_text("❌ <b>Пользователь не найден</b>", parse_mode='HTML')
+                await update.message.reply_text("❌ Пользователь не найден", parse_mode='HTML')
                 return
     else:
         target_user_id = user_id
@@ -856,6 +886,50 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         return
     
+    if text == "Резервное копирование":
+        await update.message.reply_text(
+            "Резервное копирование\n\nВыберите действие:",
+            reply_markup=get_backup_menu_keyboard()
+        )
+        return
+    
+    if text == "Назад в админ-панель":
+        await update.message.reply_text(
+            "Возврат в админ-панель",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    if text == "Создать бэкап":
+        await backup_manager.create_backup(update, context)
+        return
+    
+    if text == "Показать бэкапы":
+        await backup_manager.show_backups(update, context)
+        return
+    
+    if text == "Восстановить":
+        await backup_manager.show_backups(update, context)
+        return
+    
+    if text == "Автоочистка":
+        await backup_manager.auto_cleanup(update, context)
+        return
+    
+    if text == "✅ Да, восстановить":
+        if 'restore_file' in context.user_data:
+            await backup_manager.perform_restore(update, context)
+        return
+    
+    if text == "❌ Нет, отменить":
+        await update.message.reply_text(
+            "Восстановление отменено",
+            reply_markup=get_backup_menu_keyboard()
+        )
+        context.user_data.pop('restore_file', None)
+        context.user_data.pop('backups_list', None)
+        return
+    
     if text == "Удалить отзыв":
         context.user_data['admin_action'] = 'select_user_for_deletion'
         await update.message.reply_text(
@@ -966,45 +1040,59 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         
         context.user_data.pop('admin_action', None)
         context.user_data.pop('broadcast_text', None)
+
+async def handle_admin_input(update: Update, context: CallbackContext) -> None:
+    """Обработка ввода от админа"""
+    user_id = update.effective_user.id
+    text = update.message.text
     
-    elif text == "❌ Нет, отменить":
-        await update.message.reply_text(
-            "Рассылка отменена",
-            reply_markup=get_admin_menu_keyboard()
-        )
-        context.user_data.pop('admin_action', None)
-        context.user_data.pop('broadcast_text', None)
-    
-    elif text == "Создать бэкап":
-        await backup_manager.create_backup(update, context)
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Доступ запрещен")
         return
     
-    elif text == "Восстановить":
-        await backup_manager.show_backups(update, context)
-        return
+    action = context.user_data.get('admin_action')
     
-    elif text == "Автоочистка":
-        backup_manager._cleanup_old_backups()
+    if not action:
         await update.message.reply_text(
-            "✅ Автоочистка выполнена\n"
-            "Старые бэкапы удалены (оставлен 1 последний)",
+            "Выберите действие в меню:",
             reply_markup=get_admin_menu_keyboard()
         )
         return
     
-    elif text == "Да, восстановить":
-        if context.user_data.get('admin_action') == 'confirm_restore':
-            await backup_manager.perform_restore(update, context)
-        return
+    if action == 'select_user_for_deletion':
+        if not text.isdigit():
+            await update.message.reply_text("❌ Введите числовой ID пользователя")
+            return
+        
+        target_id = int(text)
+        context.user_data['user_to_delete_reps'] = target_id
+        
+        await show_user_reputations_for_deletion(update, target_id)
+        context.user_data['admin_action'] = 'waiting_for_rep_selection'
     
-    elif text == "Нет, отменить":
+    elif action == 'broadcast':
+        if not text or text.strip() == "":
+            await update.message.reply_text("❌ Введите текст для рассылки")
+            return
+        
+        context.user_data['broadcast_text'] = text.strip()
+        
+        users = get_all_users()
+        total = len(users)
+        
+        preview = text.strip()
+        if len(preview) > 100:
+            preview = preview[:97] + "..."
+        
         await update.message.reply_text(
-            "Восстановление отменено",
-            reply_markup=get_admin_menu_keyboard()
+            f"Предпросмотр рассылки\n\n"
+            f"{text.strip()}\n\n"
+            f"Отправить {total} пользователям?\n\n"
+            f"Текст ({len(text.strip())} символов):\n{preview}",
+            reply_markup=ReplyKeyboardMarkup([
+                ['✅ Да, отправить', '❌ Нет, отменить']
+            ], resize_keyboard=True)
         )
-        context.user_data.pop('admin_action', None)
-        context.user_data.pop('restore_file', None)
-        return
 
 async def show_user_reputations_for_deletion(update: Update, user_id: int):
     """Показать отзывы пользователя с кнопками удаления"""
@@ -1056,64 +1144,6 @@ async def show_user_reputations_for_deletion(update: Update, user_id: int):
         "Выберите отзыв для удаления или нажмите ❌ Отмена",
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
-
-async def handle_admin_input(update: Update, context: CallbackContext) -> None:
-    """Обработка ввода от админа"""
-    user_id = update.effective_user.id
-    text = update.message.text
-    
-    if user_id not in ADMINS:
-        await update.message.reply_text("❌ Доступ запрещен")
-        return
-    
-    if context.user_data.get('awaiting_backup_choice'):
-        await backup_manager.restore_backup(update, context)
-        context.user_data.pop('awaiting_backup_choice', None)
-        return
-    
-    action = context.user_data.get('admin_action')
-    
-    if not action:
-        await update.message.reply_text(
-            "Выберите действие в меню:",
-            reply_markup=get_admin_menu_keyboard()
-        )
-        return
-    
-    if action == 'select_user_for_deletion':
-        if not text.isdigit():
-            await update.message.reply_text("❌ Введите числовой ID пользователя")
-            return
-        
-        target_id = int(text)
-        context.user_data['user_to_delete_reps'] = target_id
-        
-        await show_user_reputations_for_deletion(update, target_id)
-        context.user_data['admin_action'] = 'waiting_for_rep_selection'
-    
-    elif action == 'broadcast':
-        if not text or text.strip() == "":
-            await update.message.reply_text("❌ Введите текст для рассылки")
-            return
-        
-        context.user_data['broadcast_text'] = text.strip()
-        
-        users = get_all_users()
-        total = len(users)
-        
-        preview = text.strip()
-        if len(preview) > 100:
-            preview = preview[:97] + "..."
-        
-        await update.message.reply_text(
-            f"Предпросмотр рассылки\n\n"
-            f"{text.strip()}\n\n"
-            f"Отправить {total} пользователям?\n\n"
-            f"Текст ({len(text.strip())} символов):\n{preview}",
-            reply_markup=ReplyKeyboardMarkup([
-                ['✅ Да, отправить', '❌ Нет, отменить']
-            ], resize_keyboard=True)
-        )
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
     """Обработка inline-кнопок админ-панели"""
@@ -1192,8 +1222,24 @@ ID: {rep_data['from_user'] if rep_data['from_user'] else "Неизвестно"}
                 )
         else:
             await query.answer("Отзыв не найден", show_alert=True)
+    
+    # Обработка кнопок бэкапов
+    elif data.startswith('restore_'):
+        # Получаем номер бэкапа из кнопки
+        try:
+            backup_index = int(data.replace('restore_', ''))
+            await backup_manager.restore_backup(update, context, backup_index)
+        except:
+            await query.answer("Ошибка обработки", show_alert=True)
+    
+    elif data == "backup_cancel":
+        await query.message.delete()
+        await query.message.chat.send_message(
+            "Отменено",
+            reply_markup=get_backup_menu_keyboard()
+        )
 
-# ========== ОСТАЛЬНОЙ КОД (без изменений) ==========
+# ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
 async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
     """Показать профиль пользователя с кнопками при переходе из чата"""
     user_info = get_user_info(target_user_id)
@@ -1243,7 +1289,7 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_reputation_photo(update: Update, rep_id: int, back_context: str, context: CallbackContext) -> None:
-    """Показать фото отзыва с информацией (редактируем текущее сообщение)"""
+    """Показать фото отзыва с информацией"""
     query = update.callback_query
     await query.answer()
     
@@ -1309,7 +1355,7 @@ ID: {user_id_display}
                 print(f"❌ Ошибка редактирования текста: {e3}")
 
 async def show_my_reputation_menu(query, rep_type='all'):
-    """Показать меню репутации с кнопками для просмотра фото (с фото)"""
+    """Показать меню репутации с кнопками для просмотра фото"""
     user_id = query.from_user.id
     stats = get_reputation_stats(user_id)
     
@@ -1392,7 +1438,7 @@ async def show_my_reputation_menu(query, rep_type='all'):
         )
 
 async def show_found_user_reputation_menu(query, target_user_id, rep_type='all'):
-    """Показать меню репутации найденного пользователя (с фото)"""
+    """Показать меню репутации найденного пользователя"""
     user_info = get_user_info(target_user_id)
     username = user_info.get("username", "") if user_info else f"id{target_user_id}"
     
@@ -1482,6 +1528,10 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
     await query.answer()
     
     if query.data.startswith('admin_'):
+        await handle_admin_callback(update, context)
+        return
+    
+    if query.data.startswith('restore_') or query.data == 'backup_cancel':
         await handle_admin_callback(update, context)
         return
     
@@ -1634,7 +1684,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await handle_old_button_logic(query, context)
 
 async def show_reputation_selection_menu(query, is_own=True, target_user_id=None):
-    """Меню выбора типа репутации (с фото)"""
+    """Меню выбора типа репутации"""
     text = "<b>Выберите раздел:</b>"
     
     if is_own:
@@ -1670,7 +1720,7 @@ async def show_reputation_selection_menu(query, is_own=True, target_user_id=None
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_last_reputation(query, is_positive=True, is_own=True):
-    """Обработка последнего отзыва (с фото)"""
+    """Обработка последнего отзыва"""
     user_id = query.from_user.id if is_own else query.message.chat.id
     
     if is_positive:
@@ -1733,11 +1783,11 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_old_button_logic(query, context):
-    """Старая логика для кнопок (оставлена для совместимости)"""
+    """Старая логика для кнопок"""
     pass
 
 async def show_profile_pm(query, user_id, is_own_profile=True):
-    """Показать профиль в личных сообщениях (с фото)"""
+    """Показать профиль в личных сообщениях"""
     user_info = get_user_info(user_id)
     stats = get_reputation_stats(user_id)
     
@@ -1844,17 +1894,18 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
         
         admin_menu_commands = [
             "Удалить отзыв", "Статистика", "Рассылка", "Главное меню",
-            "Создать бэкап", "Восстановить", "Автоочистка",
+            "Резервное копирование", "Назад в админ-панель",
+            "Создать бэкап", "Показать бэкапы", "Восстановить", "Автоочистка",
             "✅ Да, удалить", "❌ Нет", "❌ Отмена",
             "✅ Да, отправить", "❌ Нет, отменить",
-            "Да, восстановить", "Нет, отменить"
+            "✅ Да, восстановить", "❌ Нет, отменить"
         ]
         
         if text in admin_menu_commands:
             await handle_admin_menu(update, context)
             return
         
-        if 'admin_action' in context.user_data or 'awaiting_backup_choice' in context.user_data:
+        if 'admin_action' in context.user_data:
             await handle_admin_input(update, context)
             return
     
@@ -2142,7 +2193,8 @@ def main():
     print(f"\n✅ Резервное копирование: Добавлено")
     print(f"   - Создание бэкапов")
     print(f"   - Восстановление из бэкапов")
-    print(f"   - Автоочистка (оставляет 1 последний)")
+    print(f"   - Автоочистка")
+    print(f"   - Инлайн-кнопки для выбора")
     
     # Инициализация БД
     init_db()
@@ -2158,7 +2210,7 @@ def main():
     app.add_handler(CommandHandler("rep", quick_profile))
     app.add_handler(CommandHandler("profile", quick_profile))
     
-    # Обработчики кнопок (добавляем админские callback-ы)
+    # Обработчики кнопок
     app.add_handler(CallbackQueryHandler(button_handler))
     
     # Обработчик ВСЕХ сообщений
