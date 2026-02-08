@@ -662,19 +662,65 @@ class SimpleBackup:
             )
             return
     
-    async def perform_restore(self, update: Update, context: CallbackContext):
+   async def perform_restore(self, update: Update, context: CallbackContext):
         """Выполнить восстановление базы (Python версия)"""
         backup_file = context.user_data.get('restore_file')
         
+        # Получаем сообщение из callback_query или из update.message
+        if update.callback_query:
+            message = update.callback_query.message
+        else:
+            message = update.message
+        
         if not backup_file or not os.path.exists(backup_file):
-            await update.message.reply_text(
+            await message.reply_text(
                 "Файл бэкапа не найден",
                 reply_markup=get_backup_menu_keyboard()
             )
             context.user_data.pop('restore_file', None)
             return
         
-        msg = await update.message.reply_text("Восстановление...")
+        msg = await message.reply_text("Восстановление...")
+        
+        try:
+            # Распаковываем
+            with gzip.open(backup_file, 'rt', encoding='utf-8') as f:
+                sql_content = f.read()
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Разбиваем на отдельные команды SQL
+            sql_commands = sql_content.split(';')
+            
+            for cmd in sql_commands:
+                cmd = cmd.strip()
+                if cmd and not cmd.startswith('--'):
+                    try:
+                        cursor.execute(cmd)
+                    except Exception as e:
+                        print(f"⚠️ Ошибка выполнения команды: {cmd[:50]}... - {e}")
+            
+            conn.commit()
+            conn.close()
+            
+            await msg.edit_text(
+                "✅ База восстановлена успешно"
+            )
+            
+            # Отправляем меню отдельным сообщением
+            await message.reply_text(
+                "Меню бэкапов:",
+                reply_markup=get_backup_menu_keyboard()
+            )
+            
+        except Exception as e:
+            await msg.edit_text(
+                f"❌ Ошибка восстановления: {str(e)[:200]}"
+            )
+        
+        context.user_data.pop('restore_file', None)
+        context.user_data.pop('backups_list', None)
         
         try:
             # Распаковываем
