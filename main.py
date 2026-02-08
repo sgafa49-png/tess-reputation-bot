@@ -466,82 +466,100 @@ class SimpleBackup:
         self.backup_dir = "database_backups"
         os.makedirs(self.backup_dir, exist_ok=True)
     
-    async def create_backup(self, update: Update, context: CallbackContext):
-        """Создать бэкап базы данных (Python версия)"""
-        user_id = update.effective_user.id
+async def create_backup(self, update: Update, context: CallbackContext):
+    """Создать бэкап базы данных (Python версия)"""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Доступ запрещен")
+        return
+    
+    msg = await update.message.reply_text("Создание бэкапа...")
+    
+    try:
+        print("1. Начинаю создание бэкапа...")  # ← ДОБАВЬ
         
-        if user_id not in ADMINS:
-            await update.message.reply_text("❌ Доступ запрещен")
-            return
+        timestamp = datetime.now().strftime("%d%m%y_%H%M")
+        filename = f"backup_{timestamp}.sql"
+        filepath = os.path.join(self.backup_dir, filename)
         
-        msg = await update.message.reply_text("Создание бэкапа...")
+        print(f"2. Файл: {filepath}")  # ← ДОБАВЬ
         
-        try:
-            timestamp = datetime.now().strftime("%d%m%y_%H%M")
-            filename = f"backup_{timestamp}.sql"
-            filepath = os.path.join(self.backup_dir, filename)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        print("3. Подключился к базе")  # ← ДОБАВЬ
+        
+        # Создаём SQL файл вручную
+        with open(filepath, 'w', encoding='utf-8') as f:
+            # 1. Заголовок
+            f.write(f"-- Backup TESS Reputation Bot\n")
+            f.write(f"-- Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            print("4. Начинаю выгрузку users...")  # ← ДОБАВЬ
+            # 2. Таблица users
+            cursor.execute("SELECT * FROM users")
+            users = cursor.fetchall()
+            print(f"5. Нашёл {len(users)} пользователей")  # ← ДОБАВЬ
             
-            # Создаём SQL файл вручную
-            with open(filepath, 'w', encoding='utf-8') as f:
-                # 1. Заголовок
-                f.write(f"-- Backup TESS Reputation Bot\n")
-                f.write(f"-- Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                
-                # 2. Таблица users
-                cursor.execute("SELECT * FROM users")
-                users = cursor.fetchall()
-                f.write("-- Table: users\n")
-                f.write("TRUNCATE TABLE users CASCADE;\n")
-                for user in users:
-                    user_id_db = user[0]
-                    username = str(user[1]).replace("'", "''") if user[1] else "NULL"
-                    registered_at = str(user[2]).replace("'", "''") if user[2] else "NULL"
-                    f.write(f"INSERT INTO users (user_id, username, registered_at) VALUES ({user_id_db}, '{username}', '{registered_at}');\n")
-                
-                # 3. Таблица reputation
-                cursor.execute("SELECT * FROM reputation ORDER BY id")
-                reps = cursor.fetchall()
-                f.write("\n-- Table: reputation\n")
-                f.write("TRUNCATE TABLE reputation CASCADE;\n")
-                for rep in reps:
-                    rep_id = rep[0]
-                    from_user = rep[1] if rep[1] is not None else "NULL"
-                    to_user = rep[2]
-                    text = str(rep[3]).replace("'", "''") if rep[3] else "NULL"
-                    photo_id = str(rep[4]).replace("'", "''") if rep[4] else "NULL"
-                    created_at = str(rep[5]).replace("'", "''") if rep[5] else "NULL"
-                    f.write(f"INSERT INTO reputation (id, from_user, to_user, text, photo_id, created_at) VALUES ({rep_id}, {from_user}, {to_user}, '{text}', '{photo_id}', '{created_at}');\n")
+            f.write("-- Table: users\n")
+            f.write("TRUNCATE TABLE users CASCADE;\n")
+            for user in users:
+                user_id_db = user[0]
+                username = str(user[1]).replace("'", "''") if user[1] else "NULL"
+                registered_at = str(user[2]).replace("'", "''") if user[2] else "NULL"
+                f.write(f"INSERT INTO users (user_id, username, registered_at) VALUES ({user_id_db}, '{username}', '{registered_at}');\n")
             
-            conn.close()
+            print("6. Начинаю выгрузку reputation...")  # ← ДОБАВЬ
+            # 3. Таблица reputation
+            cursor.execute("SELECT * FROM reputation ORDER BY id")
+            reps = cursor.fetchall()
+            print(f"7. Нашёл {len(reps)} отзывов")  # ← ДОБАВЬ
             
-            # Архивируем
-            with open(filepath, 'rb') as f_in:
-                with gzip.open(filepath + '.gz', 'wb') as f_out:
-                    f_out.write(f_in.read())
-            
-            # Удаляем несжатый файл
-            os.remove(filepath)
-            filepath = filepath + '.gz'
-            filename = filename + '.gz'
-            
-            size_bytes = os.path.getsize(filepath)
-            size_mb = size_bytes / (1024 * 1024)
-            
-            await msg.edit_text(
-                f"Бэкап создан\n"
-                f"Файл: {filename}\n"
-                f"Размер: {size_mb:.2f} MB\n"
-                f"Дата: {datetime.now().strftime('%d.%m %H:%M')}\n"
-                f"Записей: {len(users)} пользователей, {len(reps)} отзывов",
-                reply_markup=get_backup_menu_keyboard()
-            )
-            
-        except Exception as e:
-            await msg.edit_text(f"Ошибка: {str(e)[:200]}")
-            print(f"❌ Ошибка создания бэкапа: {e}")
+            f.write("\n-- Table: reputation\n")
+            f.write("TRUNCATE TABLE reputation CASCADE;\n")
+            for rep in reps:
+                rep_id = rep[0]
+                from_user = rep[1] if rep[1] is not None else "NULL"
+                to_user = rep[2]
+                text = str(rep[3]).replace("'", "''") if rep[3] else "NULL"
+                photo_id = str(rep[4]).replace("'", "''") if rep[4] else "NULL"
+                created_at = str(rep[5]).replace("'", "''") if rep[5] else "NULL"
+                f.write(f"INSERT INTO reputation (id, from_user, to_user, text, photo_id, created_at) VALUES ({rep_id}, {from_user}, {to_user}, '{text}', '{photo_id}', '{created_at}');\n")
+        
+        conn.close()
+        print("8. База закрыта")  # ← ДОБАВЬ
+        
+        # Архивируем
+        import gzip
+        with open(filepath, 'rb') as f_in:
+            with gzip.open(filepath + '.gz', 'wb') as f_out:
+                f_out.write(f_in.read())
+        
+        # Удаляем несжатый файл
+        os.remove(filepath)
+        filepath = filepath + '.gz'
+        filename = filename + '.gz'
+        
+        size_bytes = os.path.getsize(filepath)
+        size_mb = size_bytes / (1024 * 1024)
+        
+        print(f"9. Бэкап создан: {filename}, размер: {size_mb} MB")  # ← ДОБАВЬ
+        
+        await msg.edit_text(
+            f"Бэкап создан\n"
+            f"Файл: {filename}\n"
+            f"Размер: {size_mb:.2f} MB\n"
+            f"Дата: {datetime.now().strftime('%d.%m %H:%M')}\n"
+            f"Записей: {len(users)} пользователей, {len(reps)} отзывов",
+            reply_markup=get_backup_menu_keyboard()
+        )
+        
+    except Exception as e:
+        print(f"❌ ОШИБКА в create_backup: {e}")  # ← ДОБАВЬ
+        import traceback
+        traceback.print_exc()  # ← ДОБАВЬ ЭТО
+        await msg.edit_text(f"Ошибка: {str(e)[:200]}")
     
     async def show_backups(self, update: Update, context: CallbackContext):
         """Показать список доступных бэкапов с кнопками"""
