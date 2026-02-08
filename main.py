@@ -3,7 +3,7 @@ import re
 import sys
 import psycopg2
 import glob
-import subprocess
+import gzip
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -467,7 +467,7 @@ class SimpleBackup:
         os.makedirs(self.backup_dir, exist_ok=True)
     
     async def create_backup(self, update: Update, context: CallbackContext):
-        """Создать бэкап базы данных"""
+        """Создать бэкап базы данных (Python версия)"""
         user_id = update.effective_user.id
         
         if user_id not in ADMINS:
@@ -478,45 +478,70 @@ class SimpleBackup:
         
         try:
             timestamp = datetime.now().strftime("%d%m%y_%H%M")
-            filename = f"backup_{timestamp}.sql.gz"
+            filename = f"backup_{timestamp}.sql"
             filepath = os.path.join(self.backup_dir, filename)
             
-            cmd = f'pg_dump "{DATABASE_URL}" | gzip > "{filepath}"'
-            env = os.environ.copy()
-            result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=300)
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            if result.returncode == 0:
-                if os.path.exists(filepath):
-                    size_bytes = os.path.getsize(filepath)
-                    size_mb = size_bytes / (1024 * 1024)
-                    
-                    if size_bytes < 100:
-                        await msg.edit_text(
-                            f"ОШИБКА: Файл бэкапа почти пустой!\n"
-                            f"Размер: {size_bytes} байт\n"
-                            f"Ошибка pg_dump: {result.stderr[:200] if result.stderr else 'неизвестно'}"
-                        )
-                        if os.path.exists(filepath):
-                            os.remove(filepath)
-                        return
-                    
-                    await msg.edit_text(
-                        f"Бэкап создан\n"
-                        f"Файл: {filename}\n"
-                        f"Размер: {size_mb:.2f} MB\n"
-                        f"Дата: {datetime.now().strftime('%d.%m %H:%M')}",
-                        reply_markup=get_backup_menu_keyboard()
-                    )
-                else:
-                    await msg.edit_text("ОШИБКА: Файл бэкапа не создан")
-            else:
-                error_msg = result.stderr[:300] if result.stderr else "Неизвестная ошибка"
-                await msg.edit_text(f"ОШИБКА создания бэкапа:\n{error_msg}")
+            # Создаём SQL файл вручную
+            with open(filepath, 'w', encoding='utf-8') as f:
+                # 1. Заголовок
+                f.write(f"-- Backup TESS Reputation Bot\n")
+                f.write(f"-- Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 
-        except subprocess.TimeoutExpired:
-            await msg.edit_text("Таймаут: операция заняла слишком много времени")
+                # 2. Таблица users
+                cursor.execute("SELECT * FROM users")
+                users = cursor.fetchall()
+                f.write("-- Table: users\n")
+                f.write("TRUNCATE TABLE users CASCADE;\n")
+                for user in users:
+                    user_id_db = user[0]
+                    username = str(user[1]).replace("'", "''") if user[1] else "NULL"
+                    registered_at = str(user[2]).replace("'", "''") if user[2] else "NULL"
+                    f.write(f"INSERT INTO users (user_id, username, registered_at) VALUES ({user_id_db}, '{username}', '{registered_at}');\n")
+                
+                # 3. Таблица reputation
+                cursor.execute("SELECT * FROM reputation ORDER BY id")
+                reps = cursor.fetchall()
+                f.write("\n-- Table: reputation\n")
+                f.write("TRUNCATE TABLE reputation CASCADE;\n")
+                for rep in reps:
+                    rep_id = rep[0]
+                    from_user = rep[1] if rep[1] is not None else "NULL"
+                    to_user = rep[2]
+                    text = str(rep[3]).replace("'", "''") if rep[3] else "NULL"
+                    photo_id = str(rep[4]).replace("'", "''") if rep[4] else "NULL"
+                    created_at = str(rep[5]).replace("'", "''") if rep[5] else "NULL"
+                    f.write(f"INSERT INTO reputation (id, from_user, to_user, text, photo_id, created_at) VALUES ({rep_id}, {from_user}, {to_user}, '{text}', '{photo_id}', '{created_at}');\n")
+            
+            conn.close()
+            
+            # Архивируем
+            with open(filepath, 'rb') as f_in:
+                with gzip.open(filepath + '.gz', 'wb') as f_out:
+                    f_out.write(f_in.read())
+            
+            # Удаляем несжатый файл
+            os.remove(filepath)
+            filepath = filepath + '.gz'
+            filename = filename + '.gz'
+            
+            size_bytes = os.path.getsize(filepath)
+            size_mb = size_bytes / (1024 * 1024)
+            
+            await msg.edit_text(
+                f"Бэкап создан\n"
+                f"Файл: {filename}\n"
+                f"Размер: {size_mb:.2f} MB\n"
+                f"Дата: {datetime.now().strftime('%d.%m %H:%M')}\n"
+                f"Записей: {len(users)} пользователей, {len(reps)} отзывов",
+                reply_markup=get_backup_menu_keyboard()
+            )
+            
         except Exception as e:
-            await msg.edit_text(f"Неожиданная ошибка: {str(e)[:150]}")
+            await msg.edit_text(f"Ошибка: {str(e)[:200]}")
+            print(f"❌ Ошибка создания бэкапа: {e}")
     
     async def show_backups(self, update: Update, context: CallbackContext):
         """Показать список доступных бэкапов с кнопками"""
@@ -603,7 +628,7 @@ class SimpleBackup:
             return
     
     async def perform_restore(self, update: Update, context: CallbackContext):
-        """Выполнить восстановление базы"""
+        """Выполнить восстановление базы (Python версия)"""
         backup_file = context.user_data.get('restore_file')
         
         if not backup_file or not os.path.exists(backup_file):
@@ -617,31 +642,35 @@ class SimpleBackup:
         msg = await update.message.reply_text("Восстановление...")
         
         try:
-            cmd = f'gunzip -c "{backup_file}" | psql "{DATABASE_URL}"'
+            # Распаковываем
+            with gzip.open(backup_file, 'rt', encoding='utf-8') as f:
+                sql_content = f.read()
             
-            env = os.environ.copy()
-            result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=600)
+            conn = get_db_connection()
+            cursor = conn.cursor()
             
-            if result.returncode == 0:
-                await msg.edit_text(
-                    "База восстановлена",
-                    reply_markup=get_backup_menu_keyboard()
-                )
-            else:
-                error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
-                await msg.edit_text(
-                    f"Ошибка:\n{error_msg}",
-                    reply_markup=get_backup_menu_keyboard()
-                )
-                
-        except subprocess.TimeoutExpired:
+            # Разбиваем на отдельные команды SQL
+            sql_commands = sql_content.split(';')
+            
+            for cmd in sql_commands:
+                cmd = cmd.strip()
+                if cmd and not cmd.startswith('--'):
+                    try:
+                        cursor.execute(cmd)
+                    except Exception as e:
+                        print(f"⚠️ Ошибка выполнения команды: {cmd[:50]}... - {e}")
+            
+            conn.commit()
+            conn.close()
+            
             await msg.edit_text(
-                "Таймаут: восстановление заняло слишком много времени",
+                "База восстановлена успешно",
                 reply_markup=get_backup_menu_keyboard()
             )
+            
         except Exception as e:
             await msg.edit_text(
-                f"Ошибка: {str(e)[:150]}",
+                f"Ошибка восстановления: {str(e)[:200]}",
                 reply_markup=get_backup_menu_keyboard()
             )
         
@@ -1693,7 +1722,7 @@ async def show_reputation_selection_menu(query, is_own=True, target_user_id=None
             [InlineKeyboardButton("Отрицательные", callback_data='show_negative')],
             [InlineKeyboardButton("Все", callback_data='show_all')],
             [InlineKeyboardButton("Последний положительный", callback_data='show_last_positive')],
-            [InlineKeyboardButton("Последний отрицательный", callback_data='show_last_negative')],
+            [InlineKeyboardButton("Последный отрицательный", callback_data='show_last_negative')],
             [InlineKeyboardButton("↩️ Назад", callback_data='profile')]
         ]
     else:
@@ -2191,8 +2220,8 @@ def main():
     check_database_connection()
     
     print(f"\n✅ Резервное копирование: Добавлено")
-    print(f"   - Создание бэкапов")
-    print(f"   - Восстановление из бэкапов")
+    print(f"   - Создание бэкапов (Python версия)")
+    print(f"   - Восстановление из бэкапов (Python версия)")
     print(f"   - Автоочистка")
     print(f"   - Инлайн-кнопки для выбора")
     
