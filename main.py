@@ -352,10 +352,10 @@ def get_db_stats():
         cursor.execute('SELECT COUNT(*) FROM reputation')
         stats['total_reputations'] = cursor.fetchone()[0]
         
-        cursor.execute('SELECT COUNT(*) FROM reputation WHERE text LIKE "+%" OR text LIKE "%+rep%" OR text LIKE "%+реп%"')
+        cursor.execute("SELECT COUNT(*) FROM reputation WHERE text LIKE '%%+%%' OR text LIKE '%%+rep%%' OR text LIKE '%%+реп%%'")
         stats['positive_reps'] = cursor.fetchone()[0]
         
-        cursor.execute('SELECT COUNT(*) FROM reputation WHERE text LIKE "-%" OR text LIKE "%-rep%" OR text LIKE "%-реп%"')
+        cursor.execute("SELECT COUNT(*) FROM reputation WHERE text LIKE '%%-%%' OR text LIKE '%%-rep%%' OR text LIKE '%%-реп%%'")
         stats['negative_reps'] = cursor.fetchone()[0]
         
         cursor.execute('SELECT COUNT(DISTINCT from_user) FROM reputation')
