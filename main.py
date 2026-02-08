@@ -545,12 +545,18 @@ class SimpleBackup:
             
             print(f"9. Бэкап создан: {filename}, размер: {size_mb} MB")
             
+            # Убираем reply_markup из edit_text
             await msg.edit_text(
-                f"Бэкап создан\n"
-                f"Файл: {filename}\n"
-                f"Размер: {size_mb:.2f} MB\n"
-                f"Дата: {datetime.now().strftime('%d.%m %H:%M')}\n"
-                f"Записей: {len(users)} пользователей, {len(reps)} отзывов",
+                f"✅ Бэкап создан\n"
+                f"📁 Файл: {filename}\n"
+                f"📊 Размер: {size_mb:.2f} MB\n"
+                f"📅 Дата: {datetime.now().strftime('%d.%m %H:%M')}\n"
+                f"📊 Записей: {len(users)} пользователей, {len(reps)} отзывов"
+            )
+            
+            # Отправляем новое сообщение с меню
+            await update.message.reply_text(
+                "Меню бэкапов:",
                 reply_markup=get_backup_menu_keyboard()
             )
             
