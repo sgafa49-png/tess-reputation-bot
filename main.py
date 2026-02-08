@@ -37,8 +37,8 @@ def get_admin_keyboard():
 def get_admin_menu_keyboard():
     """Меню админ-панели"""
     return ReplyKeyboardMarkup([
-        ['Удалить отзыв', 'Все отзывы'],
-        ['Поиск по ID', 'Статистика'],
+        ['Удалить отзыв'],
+        ['Статистика'],
         ['Главное меню']
     ], resize_keyboard=True, one_time_keyboard=False)
 
@@ -240,52 +240,6 @@ def delete_reputation_by_id(rep_id):
         return False
     finally:
         conn.close()
-
-def get_all_reputations(limit=50):
-    """Получить все отзывы (для админов)"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    reps = []
-    try:
-        cursor.execute('''
-            SELECT r.*, u1.username as from_username, u2.username as to_username
-            FROM reputation r
-            LEFT JOIN users u1 ON r.from_user = u1.user_id
-            LEFT JOIN users u2 ON r.to_user = u2.user_id
-            ORDER BY r.created_at DESC
-            LIMIT %s
-        ''', (limit,))
-        
-        rows = cursor.fetchall()
-        
-        for row in rows:
-            from_username = row[6]
-            if not from_username and row[1] is None:
-                from_username = "Скрытый профиль"
-            elif not from_username:
-                from_username = f"id{row[1]}"
-            
-            to_username = row[7]
-            if not to_username:
-                to_username = f"id{row[2]}"
-            
-            reps.append({
-                'id': row[0],
-                'from_user': row[1],
-                'to_user': row[2],
-                'text': row[3],
-                'photo_id': row[4],
-                'created_at': row[5],
-                'from_username': from_username,
-                'to_username': to_username
-            })
-    except Exception as e:
-        print(f"❌ Ошибка получения всех отзывов: {e}")
-    finally:
-        conn.close()
-    
-    return reps
 
 def get_reputations_by_user_id(user_id):
     """Получить все отзывы пользователя (по from_user или to_user)"""
@@ -605,6 +559,18 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("❌ Доступ запрещен")
         return
     
+    # 🔥 ИСПРАВЛЕНИЕ: Обработка кнопки "Отмена"
+    if text == "❌ Отмена":
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('user_to_delete_reps', None)
+        context.user_data.pop('rep_to_delete', None)
+        
+        await update.message.reply_text(
+            "🪄 Отменено",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
     if text == "Главное меню":
         # Возвращаемся к главной клавиатуре админа
         await update.message.reply_text(
@@ -614,42 +580,9 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         return
     
     if text == "Удалить отзыв":
-        context.user_data['admin_action'] = 'delete_rep'
+        context.user_data['admin_action'] = 'select_user_for_deletion'
         await update.message.reply_text(
-            "🪄 Введите ID отзыва для удаления:\n\n(или отправьте ❌ Отмена)",
-            reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
-        )
-        return
-    
-    if text == "Все отзывы":
-        reps = get_all_reputations(limit=20)
-        if not reps:
-            await update.message.reply_text("🪄 Отзывов пока нет", reply_markup=get_admin_menu_keyboard())
-            return
-        
-        message = "🪄 Последние 20 отзывов:\n\n"
-        for rep in reps:
-            rep_type = get_reputation_type(rep["text"])
-            emoji = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "📝"
-            short_text = rep['text'][:50] + "..." if len(rep['text']) > 50 else rep['text']
-            date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
-            
-            message += f"{emoji} ID{rep['id']}: {rep['from_username']} → {rep['to_username']}\n"
-            message += f"   📝 {short_text}\n"
-            message += f"   📅 {date}\n\n"
-        
-        message += "\n🪄 Для удаления введите команду: Удалить отзыв"
-        
-        await update.message.reply_text(
-            message,
-            reply_markup=get_admin_menu_keyboard()
-        )
-        return
-    
-    if text == "Поиск по ID":
-        context.user_data['admin_action'] = 'search_user_id'
-        await update.message.reply_text(
-            "🪄 Введите ID пользователя для поиска всех его отзывов:\n\n(или отправьте ❌ Отмена)",
+            "🪄 Введите ID пользователя, чьи отзывы хотите удалить:\n\n(или отправьте ❌ Отмена)",
             reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
         )
         return
@@ -670,6 +603,91 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
             reply_markup=get_admin_menu_keyboard()
         )
         return
+    
+    # 🔥 ИСПРАВЛЕНИЕ: Обработка кнопок подтверждения удаления
+    if text == "✅ Да, удалить":
+        rep_id = context.user_data.get('rep_to_delete')
+        if not rep_id:
+            await update.message.reply_text("❌ Ошибка: ID отзыва не найден", reply_markup=get_admin_menu_keyboard())
+            return
+        
+        if delete_reputation_by_id(rep_id):
+            message = f"✅ Отзыв #{rep_id} успешно удален"
+        else:
+            message = f"❌ Ошибка при удалении отзыва #{rep_id}"
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_admin_menu_keyboard()
+        )
+        
+        # Очищаем данные
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('user_to_delete_reps', None)
+        context.user_data.pop('rep_to_delete', None)
+    
+    elif text == "❌ Нет":
+        await update.message.reply_text(
+            "🪄 Удаление отменено",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('rep_to_delete', None)
+
+async def show_user_reputations_for_deletion(update: Update, user_id: int):
+    """Показать отзывы пользователя с кнопками удаления"""
+    reps = get_reputations_by_user_id(user_id)
+    
+    if not reps:
+        await update.message.reply_text(
+            f"🪄 У пользователя ID{user_id} нет отзывов",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    # Показываем отзывы с inline-кнопками
+    for i, rep in enumerate(reps[:10]):  # Ограничим 10 отзывами
+        rep_type = get_reputation_type(rep["text"])
+        type_emoji = "🪄"
+        
+        short_text = rep['text']
+        if len(short_text) > 50:
+            short_text = short_text[:47] + "..."
+        
+        date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
+        
+        # Определяем направление
+        if rep['to_user'] == user_id:
+            direction = f"Получил от {rep['from_username']}"
+        else:
+            direction = f"Отправил {rep['to_username']}"
+        
+        message = f"""🪄 Отзыв #{rep['id']}
+🪄 {direction}
+🪄 {short_text}
+🪄 {date}"""
+        
+        # Inline-кнопки под отзывом
+        keyboard = [
+            [
+                InlineKeyboardButton("🗑 Удалить", callback_data=f"admin_delete_rep_{rep['id']}"),
+                InlineKeyboardButton("👁 Просмотр", callback_data=f"admin_view_rep_{rep['id']}")
+            ]
+        ]
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    if len(reps) > 10:
+        await update.message.reply_text(f"🪄 ... и еще {len(reps) - 10} отзывов")
+    
+    # Кнопка для возврата
+    await update.message.reply_text(
+        "🪄 Выберите отзыв для удаления или нажмите ❌ Отмена",
+        reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+    )
 
 async def handle_admin_input(update: Update, context: CallbackContext) -> None:
     """Обработка ввода от админа"""
@@ -678,15 +696,6 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
     
     if user_id not in ADMINS:
         await update.message.reply_text("❌ Доступ запрещен")
-        return
-    
-    if text == "❌ Отмена":
-        await update.message.reply_text(
-            "🪄 Отменено",
-            reply_markup=get_admin_menu_keyboard()
-        )
-        context.user_data.pop('admin_action', None)
-        context.user_data.pop('rep_to_delete', None)
         return
     
     action = context.user_data.get('admin_action')
@@ -699,111 +708,101 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
         )
         return
     
-    if action == 'delete_rep':
-        if 'rep_to_delete' not in context.user_data:
-            # Первый шаг: получение ID
-            if not text.isdigit():
-                await update.message.reply_text("❌ Введите числовой ID отзыва")
-                return
-            
-            rep_id = int(text)
-            rep_data = get_reputation_by_id(rep_id)
-            
-            if not rep_data:
-                await update.message.reply_text("❌ Отзыв не найден")
-                return
-            
-            # Сохраняем данные отзыва и показываем подтверждение
-            context.user_data['rep_to_delete'] = rep_data
-            
-            rep_type = get_reputation_type(rep_data["text"])
-            type_text = "✅ ПОЛОЖИТЕЛЬНЫЙ" if rep_type == '+' else "❌ ОТРИЦАТЕЛЬНЫЙ"
-            date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
-            
-            message = f"""🪄 Отзыв #{rep_id} ({type_text})
-
-👤 От: {rep_data['from_username']}
-🎯 Кому: id{rep_data['to_user']}
-📅 Дата: {date}
-📝 Текст: {rep_data['text'][:100]}...
-
-Удалить этот отзыв?"""
-            
-            await update.message.reply_text(
-                message,
-                reply_markup=ReplyKeyboardMarkup([
-                    ['✅ Да, удалить', '❌ Нет']
-                ], resize_keyboard=True)
-            )
-        
-        else:
-            # Второй шаг: подтверждение удаления
-            if text == "✅ Да, удалить":
-                rep_data = context.user_data['rep_to_delete']
-                rep_id = rep_data['id']
-                
-                if delete_reputation_by_id(rep_id):
-                    message = f"✅ Отзыв #{rep_id} успешно удален"
-                else:
-                    message = f"❌ Ошибка при удалении отзыва #{rep_id}"
-                
-                await update.message.reply_text(
-                    message,
-                    reply_markup=get_admin_menu_keyboard()
-                )
-                
-                # Очищаем данные
-                context.user_data.pop('rep_to_delete', None)
-                context.user_data.pop('admin_action', None)
-            
-            elif text == "❌ Нет":
-                await update.message.reply_text(
-                    "🪄 Удаление отменено",
-                    reply_markup=get_admin_menu_keyboard()
-                )
-                context.user_data.pop('rep_to_delete', None)
-                context.user_data.pop('admin_action', None)
-    
-    elif action == 'search_user_id':
+    if action == 'select_user_for_deletion':
         if not text.isdigit():
             await update.message.reply_text("❌ Введите числовой ID пользователя")
             return
         
         target_id = int(text)
-        reps = get_reputations_by_user_id(target_id)
+        context.user_data['user_to_delete_reps'] = target_id
         
-        if not reps:
-            await update.message.reply_text(f"🪄 У пользователя ID{target_id} нет отзывов", reply_markup=get_admin_menu_keyboard())
-            return
+        # Показываем отзывы пользователя
+        await show_user_reputations_for_deletion(update, target_id)
+        context.user_data['admin_action'] = 'waiting_for_rep_selection'
+
+async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
+    """Обработка inline-кнопок админ-панели"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    if user_id not in ADMINS:
+        await query.answer("Доступ запрещен", show_alert=True)
+        return
+    
+    data = query.data
+    
+    if data.startswith('admin_delete_rep_'):
+        rep_id = int(data.replace('admin_delete_rep_', ''))
         
-        message = f"🪄 Отзывы пользователя ID{target_id}:\n\n"
+        # Сохраняем ID отзыва для удаления
+        context.user_data['rep_to_delete'] = rep_id
         
-        for rep in reps[:15]:  # Ограничим 15 отзывами
-            rep_type = get_reputation_type(rep["text"])
-            emoji = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "📝"
-            short_text = rep['text'][:40] + "..." if len(rep['text']) > 40 else rep['text']
-            date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
+        # Показываем отзыв и запрашиваем подтверждение
+        rep_data = get_reputation_by_id(rep_id)
+        if rep_data:
+            rep_type = get_reputation_type(rep_data["text"])
+            type_text = "🪄 ПОЛОЖИТЕЛЬНЫЙ" if rep_type == '+' else "🪄 ОТРИЦАТЕЛЬНЫЙ"
+            date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
             
-            direction = f"{rep['from_username']} → {rep['to_username']}"
-            if rep['from_user'] == target_id:
-                direction = f"👤 Отправил → {rep['to_username']}"
-            else:
-                direction = f"👤 Получил от {rep['from_username']}"
+            message = f"""🪄 Отзыв #{rep_id} ({type_text})
+
+🪄 От: {rep_data['from_username']}
+🪄 Кому: id{rep_data['to_user']}
+🪄 Дата: {date}
+🪄 Текст: {rep_data['text'][:100]}...
+
+Удалить этот отзыв?"""
             
-            message += f"{emoji} ID{rep['id']}: {direction}\n"
-            message += f"   📝 {short_text}\n"
-            message += f"   📅 {date}\n\n"
+            # Удаляем предыдущее сообщение с кнопками
+            try:
+                await query.message.delete()
+            except:
+                pass
+            
+            # Отправляем запрос подтверждения
+            await query.message.chat.send_message(
+                message,
+                reply_markup=ReplyKeyboardMarkup([
+                    ['✅ Да, удалить', '❌ Нет']
+                ], resize_keyboard=True)
+            )
+    
+    elif data.startswith('admin_view_rep_'):
+        rep_id = int(data.replace('admin_view_rep_', ''))
         
-        if len(reps) > 15:
-            message += f"\n... и еще {len(reps) - 15} отзывов"
-        
-        message += "\n🪄 Для удаления используйте 'Удалить отзыв'"
-        
-        await update.message.reply_text(
-            message,
-            reply_markup=get_admin_menu_keyboard()
-        )
-        context.user_data.pop('admin_action', None)
+        # Показываем полный отзыв со скриншотом
+        rep_data = get_reputation_by_id(rep_id)
+        if rep_data and rep_data['photo_id']:
+            rep_type = get_reputation_type(rep_data["text"])
+            type_text = "🪄 ПОЛОЖИТЕЛЬНЫЙ ОТЗЫВ" if rep_type == '+' else "🪄 ОТРИЦАТЕЛЬНЫЙ ОТЗЫВ"
+            
+            date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
+            
+            caption = f"""<b>{type_text}</b>
+
+🪄 От: {rep_data['from_username']}
+🪄 ID: {rep_data['from_user'] if rep_data['from_user'] else "Неизвестно"}
+🪄 Дата: {date}
+
+🪄 Текст:
+{rep_data['text']}"""
+            
+            # Показываем фото отзыва
+            try:
+                await query.message.chat.send_photo(
+                    photo=rep_data['photo_id'],
+                    caption=caption,
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                print(f"❌ Ошибка отправки фото: {e}")
+                await query.message.chat.send_message(
+                    f"{caption}\n\n⚠️ Фото недоступно",
+                    parse_mode='HTML'
+                )
+        else:
+            await query.answer("Отзыв не найден", show_alert=True)
 
 # ========== ОСТАЛЬНОЙ КОД (без изменений) ==========
 async def show_profile_with_working_buttons(update: Update, target_user_id: int, context: CallbackContext):
@@ -821,7 +820,7 @@ async def show_profile_with_working_buttons(update: Update, target_user_id: int,
         except:
             registration_date = datetime.now().strftime("%d/%m/%Y")
     else:
-        registration_date = datetime.now().strftime("%d/%m/%Y")
+        registration_date = datetime.now().strftime("%d/%m/Y")
     
     text = f"""{display_username} (ID: {target_user_id})
 
@@ -872,9 +871,9 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str, 
     if context.user_data.get('from_group') and target_user_id != current_user_id:
         back_context = 'back_from_group_view'
     
-    # Форматируем подпись
+    # Форматируем подпись (ЗАМЕНА СМАЙЛОВ НА 🪄)
     rep_type = get_reputation_type(rep_data["text"])
-    type_text = "✅ ПОЛОЖИТЕЛЬНЫЙ ОТЗЫВ" if rep_type == '+' else "❌ ОТРИЦАТЕЛЬНЫЙ ОТЗЫВ"
+    type_text = "🪄 ПОЛОЖИТЕЛЬНЫЙ ОТЗЫВ" if rep_type == '+' else "🪄 ОТРИЦАТЕЛЬНЫЙ ОТЗЫВ"
     
     from_username = rep_data["from_username"]
     user_id_display = rep_data["from_user"] if rep_data["from_user"] else "Неизвестно"
@@ -964,13 +963,13 @@ async def show_my_reputation_menu(query, rep_type='all'):
             )
         return
     
-    # Формируем текст и кнопки
+    # Формируем текст и кнопки (ЗАМЕНА СМАЙЛОВ НА 🪄)
     text = f"<b>{title}</b>\n\n"
     keyboard = []
     
     for i, rep in enumerate(filtered_reps[:10], 1):
         rep_type_char = get_reputation_type(rep["text"])
-        emoji = "✅" if rep_type_char == '+' else "❌" if rep_type_char == '-' else "📝"
+        emoji = "🪄"  # ЗАМЕНА: было "✅"/"❌"/"📝"
         from_user = rep.get("from_username", f"id{rep['from_user']}")
         date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
         
@@ -979,13 +978,13 @@ async def show_my_reputation_menu(query, rep_type='all'):
         if len(short_text) > 40:
             short_text = short_text[:37] + "..."
         
-        text += f"{i}. {emoji} От {from_user}\n"
-        text += f"   {short_text}\n"
-        text += f"   📅 {date}\n\n"
+        text += f"{i}. 🪄 От {from_user}\n"
+        text += f"   🪄 {short_text}\n"
+        text += f"   🪄 {date}\n\n"  # ЗАМЕНА: было "📅 {date}"
         
         # Добавляем кнопку для просмотра скрина
         keyboard.append([InlineKeyboardButton(
-            f"{emoji} {i}. {from_user} - 📅 {date}", 
+            f"🪄 {i}. {from_user} - 🪄 {date}",  # ЗАМЕНА смайлов
             callback_data=f"view_photo_{rep['id']}_{rep_type}"
         )])
     
@@ -1055,13 +1054,13 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
             )
         return
     
-    # Формируем текст и кнопки
+    # Формируем текст и кнопки (ЗАМЕНА СМАЙЛОВ НА 🪄)
     text = f"<b>{title}</b>\n\n"
     keyboard = []
     
     for i, rep in enumerate(filtered_reps[:10], 1):
         rep_type_char = get_reputation_type(rep["text"])
-        emoji = "✅" if rep_type_char == '+' else "❌" if rep_type_char == '-' else "📝"
+        emoji = "🪄"  # ЗАМЕНА: было "✅"/"❌"/"📝"
         from_user = rep.get("from_username", f"id{rep['from_user']}")
         date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
         
@@ -1070,13 +1069,13 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
         if len(short_text) > 40:
             short_text = short_text[:37] + "..."
         
-        text += f"{i}. {emoji} От {from_user}\n"
-        text += f"   {short_text}\n"
-        text += f"   📅 {date}\n\n"
+        text += f"{i}. 🪄 От {from_user}\n"
+        text += f"   🪄 {short_text}\n"
+        text += f"   🪄 {date}\n\n"  # ЗАМЕНА: было "📅 {date}"
         
         # Добавляем кнопку для просмотра скрина
         keyboard.append([InlineKeyboardButton(
-            f"{emoji} {i}. {from_user} - 📅 {date}", 
+            f"🪄 {i}. {from_user} - 🪄 {date}",  # ЗАМЕНА смайлов
             callback_data=f"found_view_photo_{rep['id']}_{rep_type}"
         )])
     
@@ -1109,6 +1108,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
     """Обработчик кнопок"""
     query = update.callback_query
     await query.answer()
+    
+    # 🆕 Обработка админских callback-ов (должно быть ПЕРВЫМ!)
+    if query.data.startswith('admin_'):
+        await handle_admin_callback(update, context)
+        return
     
     # Обработка просмотра фото для своих отзывов
     if query.data.startswith('view_photo_'):
@@ -1331,18 +1335,18 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         return
     
-    # Показываем информацию о последнем отзыве
+    # Показываем информацию о последнем отзыве (ЗАМЕНА СМАЙЛОВ)
     from_username = rep_data.get("from_username", f"id{rep_data['from_user']}")
     date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
     rep_type = get_reputation_type(rep_data["text"])
-    emoji = "✅" if rep_type == '+' else "❌" if rep_type == '-' else "📝"
+    emoji = "🪄"  # ЗАМЕНА: было "✅"/"❌"/"📝"
     
     text = f"""<b>{title}</b>
 
-{emoji} От: {from_username}
-📅 Дата: {date}
+🪄 От: {from_username}
+🪄 Дата: {date}  # ЗАМЕНА: было "📅 Дата: {date}"
 
-📝 Текст:
+🪄 Текст:
 {rep_data['text']}"""
     
     # Добавляем кнопку для просмотра скрина
@@ -1480,11 +1484,10 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
             await handle_admin_panel(update, context)
             return
         
-        # Обработка меню админ-панели
+        # Обработка меню админ-панели (ДОБАВЛЕНО "❌ Отмена")
         admin_menu_commands = [
-            "Удалить отзыв", "Все отзывы", "Поиск по ID",
-            "Статистика", "Главное меню",
-            "✅ Да, удалить", "❌ Нет", "❌ Отмена"
+            "Удалить отзыв", "Статистика", "Главное меню",
+            "✅ Да, удалить", "❌ Нет", "❌ Отмена"  # 🔥 ДОБАВЛЕНО
         ]
         
         if text in admin_menu_commands:
@@ -1801,7 +1804,7 @@ def main():
     app.add_handler(CommandHandler("rep", quick_profile))
     app.add_handler(CommandHandler("profile", quick_profile))
     
-    # Обработчики кнопок
+    # Обработчики кнопок (добавляем админские callback-ы)
     app.add_handler(CallbackQueryHandler(button_handler))
     
     # Обработчик ВСЕХ сообщений
