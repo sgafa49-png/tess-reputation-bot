@@ -31,18 +31,19 @@ ADMINS = [8438564254, 7819922804]  # ID админов
 
 # ========== КЛАВИАТУРЫ ==========
 def get_admin_keyboard():
-    """Клавиатура для админов (только кнопка админ-панели)"""
+    """Клавиатура для админов"""
     return ReplyKeyboardMarkup([
-        ['🪄 АДМИН ПАНЕЛЬ']
+        ['Админ панель']
     ], resize_keyboard=True, one_time_keyboard=False)
 
 def get_admin_menu_keyboard():
-    """Меню админ-панели с бэкапом"""
+    """Меню админ-панели"""
     return ReplyKeyboardMarkup([
-        ['🗑 Удалить отзыв'],
-        ['📊 Статистика', '📢 Пост в бота'],
-        ['💾 Бэкап', '🔄 Восстановить'],
-        ['⬅️ Главная']
+        ['Удалить отзыв'],
+        ['Статистика', 'Рассылка'],
+        ['Создать бэкап', 'Восстановить'],
+        ['Автоочистка'],
+        ['Главное меню']
     ], resize_keyboard=True, one_time_keyboard=False)
 
 # ========== КОНСТАНТЫ ДЛЯ РЕПУТАЦИИ ==========
@@ -60,7 +61,6 @@ def get_reputation_type(text):
     text_lower = text.lower()
     match = REP_PATTERN.search(text_lower)
     if match:
-        # Получаем символ в начале совпадения
         start_pos = match.start()
         if start_pos < len(text_lower):
             char = text_lower[start_pos]
@@ -109,6 +109,29 @@ def init_db():
         print(f"❌ Ошибка создания таблиц: {e}")
     finally:
         conn.close()
+
+def check_database_connection():
+    """Проверка подключения к БД"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT COUNT(*) FROM users')
+        users_count = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM reputation')
+        reps_count = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        print(f"✅ Подключение к БД: Успешно")
+        print(f"👥 Пользователей в БД: {users_count}")
+        print(f"📝 Отзывов в БД: {reps_count}")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка подключения к БД: {e}")
+        return False
 
 # ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
 def save_user(user_id, username):
@@ -443,40 +466,71 @@ class SimpleBackup:
             await update.message.reply_text("❌ Доступ запрещен")
             return
         
-        msg = await update.message.reply_text("💾 Создание бэкапа...")
+        msg = await update.message.reply_text("Создание бэкапа...")
         
         try:
             timestamp = datetime.now().strftime("%d%m%y_%H%M")
             filename = f"backup_{timestamp}.sql.gz"
             filepath = os.path.join(self.backup_dir, filename)
             
-            # Команда создания дампа
-            cmd = f'pg_dump "{DATABASE_URL}" | gzip > "{filepath}"'
+            # 🆕 ОТЛАДКА
+            print(f"\n{'='*60}")
+            print(f"🔍 Начинаю создание бэкапа")
+            print(f"🔍 DATABASE_URL: {DATABASE_URL[:50]}...")
             
-            # Запускаем процесс
+            cmd = f'pg_dump "{DATABASE_URL}" | gzip > "{filepath}"'
+            print(f"🔍 Выполняю команду: {cmd[:100]}...")
+            
             env = os.environ.copy()
             result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=300)
             
+            print(f"🔍 Код возврата: {result.returncode}")
+            if result.stdout:
+                print(f"🔍 Вывод: {result.stdout[:200]}")
+            if result.stderr:
+                print(f"🔍 Ошибки: {result.stderr[:200]}")
+            
             if result.returncode == 0:
-                size_mb = os.path.getsize(filepath) / (1024 * 1024)
+                if not os.path.exists(filepath):
+                    await msg.edit_text("❌ Файл бэкапа не создан")
+                    print(f"🔍 Файл не создан!")
+                    return
                 
-                # Очищаем старые бэкапы (оставляем 10 последних)
-                self._cleanup_old_backups()
+                size_bytes = os.path.getsize(filepath)
+                size_mb = size_bytes / (1024 * 1024)
+                
+                print(f"🔍 Размер файла: {size_bytes} байт ({size_mb:.2f} MB)")
+                
+                if size_bytes < 100:
+                    await msg.edit_text(
+                        f"⚠️ ОШИБКА: Файл бэкапа почти пустой!\n"
+                        f"Размер: {size_bytes} байт\n\n"
+                        f"Ошибка pg_dump:\n{result.stderr[:200] if result.stderr else 'неизвестно'}"
+                    )
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                    return
                 
                 await msg.edit_text(
                     f"✅ Бэкап создан\n"
-                    f"📁 {filename}\n"
-                    f"📦 {size_mb:.1f} MB\n"
-                    f"🗓 {datetime.now().strftime('%d.%m %H:%M')}"
+                    f"Файл: {filename}\n"
+                    f"Размер: {size_mb:.2f} MB\n"
+                    f"Дата: {datetime.now().strftime('%d.%m %H:%M')}"
                 )
+                print(f"✅ Бэкап успешно создан: {filename} ({size_mb:.2f} MB)")
             else:
-                error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
-                await msg.edit_text(f"❌ Ошибка:\n{error_msg}")
+                error_msg = result.stderr[:300] if result.stderr else "Неизвестная ошибка"
+                await msg.edit_text(f"❌ Ошибка создания бэкапа:\n{error_msg}")
+                print(f"❌ Ошибка создания бэкапа: {error_msg}")
+            
+            print(f"{'='*60}\n")
                 
         except subprocess.TimeoutExpired:
             await msg.edit_text("❌ Таймаут: операция заняла слишком много времени")
+            print("❌ Таймаут при создании бэкапа")
         except Exception as e:
-            await msg.edit_text(f"❌ Ошибка: {str(e)[:150]}")
+            await msg.edit_text(f"❌ Неожиданная ошибка: {str(e)[:150]}")
+            print(f"❌ Исключение в create_backup: {e}")
     
     async def show_backups(self, update: Update, context: CallbackContext):
         """Показать список доступных бэкапов"""
@@ -490,12 +544,12 @@ class SimpleBackup:
         backups.sort(key=os.path.getmtime, reverse=True)
         
         if not backups:
-            await update.message.reply_text("📭 Бэкапов нет")
+            await update.message.reply_text("Бэкапов нет")
             return
         
-        text = "📂 Доступные бэкапы:\n\n"
+        text = "Доступные бэкапы:\n\n"
         for i, backup in enumerate(backups[:5], 1):
-            name = os.path.basename(backup)[7:-7]  # "backup_" и ".sql.gz"
+            name = os.path.basename(backup)[7:-7]
             size = os.path.getsize(backup) / (1024 * 1024)
             date = datetime.fromtimestamp(os.path.getmtime(backup)).strftime('%d.%m %H:%M')
             text += f"{i}. {name} ({size:.1f} MB) - {date}\n"
@@ -530,14 +584,13 @@ class SimpleBackup:
         backup_file = backups[idx]
         filename = os.path.basename(backup_file)
         
-        # Запрашиваем подтверждение
         keyboard = ReplyKeyboardMarkup([
-            ['✅ Да, восстановить'],
-            ['❌ Нет, отменить']
+            ['Да, восстановить'],
+            ['Нет, отменить']
         ], resize_keyboard=True)
         
         await update.message.reply_text(
-            f"⚠️ Восстановить из:\n{filename}?",
+            f"Восстановить из:\n{filename}?",
             reply_markup=keyboard
         )
         
@@ -557,57 +610,80 @@ class SimpleBackup:
             context.user_data.pop('admin_action', None)
             return
         
-        msg = await update.message.reply_text("🔄 Восстановление...")
+        msg = await update.message.reply_text("Восстановление...")
         
         try:
-            # Команда восстановления
             cmd = f'gunzip -c "{backup_file}" | psql "{DATABASE_URL}"'
+            
+            print(f"\n{'='*60}")
+            print(f"🔍 Начинаю восстановление из {backup_file}")
+            print(f"🔍 Команда: {cmd[:100]}...")
             
             env = os.environ.copy()
             result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=600)
+            
+            print(f"🔍 Код возврата: {result.returncode}")
+            if result.stderr:
+                print(f"🔍 Ошибки восстановления: {result.stderr[:200]}")
             
             if result.returncode == 0:
                 await msg.edit_text(
                     "✅ База восстановлена",
                     reply_markup=get_admin_menu_keyboard()
                 )
+                print(f"✅ Восстановление успешно завершено")
             else:
                 error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
                 await msg.edit_text(
                     f"❌ Ошибка:\n{error_msg}",
                     reply_markup=get_admin_menu_keyboard()
                 )
+                print(f"❌ Ошибка восстановления: {error_msg}")
+            
+            print(f"{'='*60}\n")
                 
         except subprocess.TimeoutExpired:
             await msg.edit_text(
                 "❌ Таймаут: восстановление заняло слишком много времени",
                 reply_markup=get_admin_menu_keyboard()
             )
+            print("❌ Таймаут при восстановлении")
         except Exception as e:
             await msg.edit_text(
                 f"❌ Ошибка: {str(e)[:150]}",
                 reply_markup=get_admin_menu_keyboard()
             )
+            print(f"❌ Исключение при восстановлении: {e}")
         
-        # Очищаем данные
         context.user_data.pop('restore_file', None)
         context.user_data.pop('admin_action', None)
     
-    def _cleanup_old_backups(self, keep_last=10):
-        """Очистить старые бэкапы"""
+    def _cleanup_old_backups(self):
+        """Очистка старых бэкапов - оставить только 1 последний"""
         try:
             backups = glob.glob(os.path.join(self.backup_dir, "*.sql.gz"))
             backups.sort(key=os.path.getmtime, reverse=True)
             
-            if len(backups) > keep_last:
-                for old_backup in backups[keep_last:]:
+            if len(backups) > 1:
+                deleted_count = 0
+                freed_space = 0
+                
+                for old_backup in backups[1:]:
                     try:
+                        size = os.path.getsize(old_backup)
                         os.remove(old_backup)
+                        deleted_count += 1
+                        freed_space += size
                         print(f"🗑️ Удален старый бэкап: {os.path.basename(old_backup)}")
                     except:
                         pass
+                
+                if deleted_count > 0:
+                    freed_mb = freed_space / (1024 * 1024)
+                    print(f"✅ Автоочистка: удалено {deleted_count} файлов, освобождено {freed_mb:.1f} MB")
+                    
         except Exception as e:
-            print(f"⚠️ Ошибка очистки бэкапов: {e}")
+            print(f"⚠️ Ошибка автоочистки: {e}")
 
 # Создаем глобальный объект для бэкапов
 backup_manager = SimpleBackup()
@@ -645,7 +721,7 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
     
-    display_username = f"👤@{target_username}" if target_username and not target_username.startswith('id') else f"👤{target_username}"
+    display_username = f"👤@{target_username}" if target_username and not target_username.startswith('id') else f"👤id{target_user_id}"
     
     if user_info and user_info.get("registered_at"):
         try:
@@ -698,16 +774,15 @@ async def start(update: Update, context: CallbackContext) -> None:
     # Показываем клавиатуру админам
     if user_id in ADMINS:
         await update.message.reply_text(
-            "🪄 Клавиатура админа активирована.",
+            "Клавиатура админа активирована.",
             reply_markup=get_admin_keyboard()
         )
     
     if context.args and context.args[0].startswith('view_'):
         try:
             target_user_id = int(context.args[0].replace('view_', ''))
-            # Сохраняем найденного пользователя для работы кнопки "Назад"
             context.user_data['found_user_id'] = target_user_id
-            context.user_data['from_group'] = True  # Флаг что пришли из группы
+            context.user_data['from_group'] = True
             
             await show_profile_with_working_buttons(update, target_user_id, context)
             return
@@ -746,7 +821,7 @@ async def handle_admin_panel(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("❌ Доступ запрещен")
         return
     
-    text = "🪄 АДМИН ПАНЕЛЬ\n\nВыберите действие:"
+    text = "Админ панель\n\nВыберите действие:"
     
     await update.message.reply_text(
         text,
@@ -762,45 +837,43 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("❌ Доступ запрещен")
         return
     
-    # 🔥 ИСПРАВЛЕНИЕ: Обработка кнопки "Отмена"
     if text == "❌ Отмена":
         context.user_data.pop('admin_action', None)
         context.user_data.pop('user_to_delete_reps', None)
         context.user_data.pop('rep_to_delete', None)
-        context.user_data.pop('broadcast_text', None)  # 🆕 Очищаем текст рассылки
+        context.user_data.pop('broadcast_text', None)
         
         await update.message.reply_text(
-            "🪄 Отменено",
+            "Отменено",
             reply_markup=get_admin_menu_keyboard()
         )
         return
     
-    if text == "⬅️ Главная":
-        # Возвращаемся к главной клавиатуре админа
+    if text == "Главное меню":
         await update.message.reply_text(
-            "🪄 Возврат в главное меню",
+            "Возврат в главное меню",
             reply_markup=get_admin_keyboard()
         )
         return
     
-    if text == "🗑 Удалить отзыв":
+    if text == "Удалить отзыв":
         context.user_data['admin_action'] = 'select_user_for_deletion'
         await update.message.reply_text(
-            "🪄 Введите ID пользователя, чьи отзывы хотите удалить:\n\n(или отправьте ❌ Отмена)",
+            "Введите ID пользователя, чьи отзывы хотите удалить:\n\n(или отправьте ❌ Отмена)",
             reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
         )
         return
     
-    if text == "📊 Статистика":
+    if text == "Статистика":
         stats = get_db_stats()
-        message = f"""🪄 СТАТИСТИКА БАЗЫ ДАННЫХ
+        message = f"""Статистика базы данных
 
-👥 Пользователей: {stats.get('total_users', 0)}
-📝 Всего отзывов: {stats.get('total_reputations', 0)}
-✅ Положительных: {stats.get('positive_reps', 0)}
-❌ Отрицательных: {stats.get('negative_reps', 0)}
-📤 Отправителей: {stats.get('unique_senders', 0)}
-📥 Получателей: {stats.get('unique_receivers', 0)}"""
+Пользователей: {stats.get('total_users', 0)}
+Всего отзывов: {stats.get('total_reputations', 0)}
+Положительных: {stats.get('positive_reps', 0)}
+Отрицательных: {stats.get('negative_reps', 0)}
+Отправителей: {stats.get('unique_senders', 0)}
+Получателей: {stats.get('unique_receivers', 0)}"""
         
         await update.message.reply_text(
             message,
@@ -808,16 +881,14 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         return
     
-    # 🆕 ОБРАБОТКА КНОПКИ "📢 Пост в бота"
-    if text == "📢 Пост в бота":
+    if text == "Рассылка":
         context.user_data['admin_action'] = 'broadcast'
         await update.message.reply_text(
-            "📢 Введите текст для рассылки всем пользователям:\n\n(или отправьте ❌ Отмена)",
+            "Введите текст для рассылки всем пользователям:\n\n(или отправьте ❌ Отмена)",
             reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
         )
         return
     
-    # 🔥 ИСПРАВЛЕНИЕ: Обработка кнопок подтверждения удаления
     if text == "✅ Да, удалить":
         rep_id = context.user_data.get('rep_to_delete')
         if not rep_id:
@@ -834,22 +905,19 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
             reply_markup=get_admin_menu_keyboard()
         )
         
-        # Очищаем данные
         context.user_data.pop('admin_action', None)
         context.user_data.pop('user_to_delete_reps', None)
         context.user_data.pop('rep_to_delete', None)
     
     elif text == "❌ Нет":
         await update.message.reply_text(
-            "🪄 Удаление отменено",
+            "Удаление отменено",
             reply_markup=get_admin_menu_keyboard()
         )
         context.user_data.pop('admin_action', None)
         context.user_data.pop('rep_to_delete', None)
     
-    # 🆕 ОБРАБОТКА ПОДТВЕРЖДЕНИЯ РАССЫЛКИ
     elif text == "✅ Да, отправить":
-        # Получаем сохраненный текст рассылки
         broadcast_text = context.user_data.get('broadcast_text')
         if not broadcast_text:
             await update.message.reply_text("❌ Текст рассылки не найден", reply_markup=get_admin_menu_keyboard())
@@ -862,8 +930,7 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text("❌ Нет пользователей для рассылки", reply_markup=get_admin_menu_keyboard())
             return
         
-        # Отправка с прогрессом
-        progress_msg = await update.message.reply_text(f"📤 Начинаю рассылку... 0/{total}")
+        progress_msg = await update.message.reply_text(f"Начинаю рассылку... 0/{total}")
         
         success = 0
         failed = 0
@@ -878,57 +945,61 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
             except Exception as e:
                 failed += 1
             
-            # Обновляем прогресс каждые 10 отправок
             if i % 10 == 0 or i == total - 1:
                 try:
                     await progress_msg.edit_text(
-                        f"📤 Рассылка... {i+1}/{total}\n"
-                        f"✅ Успешно: {success}\n"
-                        f"❌ Ошибок: {failed}"
+                        f"Рассылка... {i+1}/{total}\n"
+                        f"Успешно: {success}\n"
+                        f"Ошибок: {failed}"
                     )
                 except:
                     pass
         
-        # Итог
         await update.message.reply_text(
             f"✅ Рассылка завершена!\n\n"
-            f"📊 Всего пользователей: {total}\n"
-            f"✅ Отправлено: {success}\n"
-            f"❌ Не отправлено: {failed}\n\n"
+            f"Всего пользователей: {total}\n"
+            f"Отправлено: {success}\n"
+            f"Не отправлено: {failed}\n\n"
             f"Текст рассылки:\n{broadcast_text[:200]}{'...' if len(broadcast_text) > 200 else ''}",
             reply_markup=get_admin_menu_keyboard()
         )
         
-        # Очищаем данные
         context.user_data.pop('admin_action', None)
         context.user_data.pop('broadcast_text', None)
     
     elif text == "❌ Нет, отменить":
         await update.message.reply_text(
-            "📢 Рассылка отменена",
+            "Рассылка отменена",
             reply_markup=get_admin_menu_keyboard()
         )
         context.user_data.pop('admin_action', None)
         context.user_data.pop('broadcast_text', None)
     
-    # 🆕 ОБРАБОТКА КНОПОК БЭКАПА
-    elif text == "💾 Бэкап":
+    elif text == "Создать бэкап":
         await backup_manager.create_backup(update, context)
         return
     
-    elif text == "🔄 Восстановить":
+    elif text == "Восстановить":
         await backup_manager.show_backups(update, context)
         return
     
-    # 🆕 ОБРАБОТКА ПОДТВЕРЖДЕНИЯ ВОССТАНОВЛЕНИЯ
-    elif text == "✅ Да, восстановить":
+    elif text == "Автоочистка":
+        backup_manager._cleanup_old_backups()
+        await update.message.reply_text(
+            "✅ Автоочистка выполнена\n"
+            "Старые бэкапы удалены (оставлен 1 последний)",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        return
+    
+    elif text == "Да, восстановить":
         if context.user_data.get('admin_action') == 'confirm_restore':
             await backup_manager.perform_restore(update, context)
         return
     
-    elif text == "❌ Нет, отменить":
+    elif text == "Нет, отменить":
         await update.message.reply_text(
-            "🔄 Восстановление отменено",
+            "Восстановление отменено",
             reply_markup=get_admin_menu_keyboard()
         )
         context.user_data.pop('admin_action', None)
@@ -941,13 +1012,12 @@ async def show_user_reputations_for_deletion(update: Update, user_id: int):
     
     if not reps:
         await update.message.reply_text(
-            f"🪄 У пользователя ID{user_id} нет отзывов",
+            f"У пользователя ID{user_id} нет отзывов",
             reply_markup=get_admin_menu_keyboard()
         )
         return
     
-    # Показываем отзывы с inline-кнопками
-    for i, rep in enumerate(reps[:10]):  # Ограничим 10 отзывами
+    for i, rep in enumerate(reps[:10]):
         rep_type = get_reputation_type(rep["text"])
         type_emoji = "🪄"
         
@@ -957,18 +1027,16 @@ async def show_user_reputations_for_deletion(update: Update, user_id: int):
         
         date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
         
-        # Определяем направление
         if rep['to_user'] == user_id:
             direction = f"Получил от {rep['from_username']}"
         else:
             direction = f"Отправил {rep['to_username']}"
         
-        message = f"""🪄 Отзыв #{rep['id']}
-🪄 {direction}
-🪄 {short_text}
-🪄 {date}"""
+        message = f"""Отзыв #{rep['id']}
+{direction}
+{short_text}
+{date}"""
         
-        # Inline-кнопки под отзывом
         keyboard = [
             [
                 InlineKeyboardButton("🗑 Удалить", callback_data=f"admin_delete_rep_{rep['id']}"),
@@ -982,11 +1050,10 @@ async def show_user_reputations_for_deletion(update: Update, user_id: int):
         )
     
     if len(reps) > 10:
-        await update.message.reply_text(f"🪄 ... и еще {len(reps) - 10} отзывов")
+        await update.message.reply_text(f"... и еще {len(reps) - 10} отзывов")
     
-    # Кнопка для возврата
     await update.message.reply_text(
-        "🪄 Выберите отзыв для удаления или нажмите ❌ Отмена",
+        "Выберите отзыв для удаления или нажмите ❌ Отмена",
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
 
@@ -999,20 +1066,18 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("❌ Доступ запрещен")
         return
     
-    action = context.user_data.get('admin_action')
-    
-    if not action:
-        # Если нет активного действия, возвращаем в меню
-        await update.message.reply_text(
-            "🪄 Выберите действие в меню:",
-            reply_markup=get_admin_menu_keyboard()
-        )
-        return
-    
-    # 🆕 ОБРАБОТКА ВЫБОРА БЭКАПА
     if context.user_data.get('awaiting_backup_choice'):
         await backup_manager.restore_backup(update, context)
         context.user_data.pop('awaiting_backup_choice', None)
+        return
+    
+    action = context.user_data.get('admin_action')
+    
+    if not action:
+        await update.message.reply_text(
+            "Выберите действие в меню:",
+            reply_markup=get_admin_menu_keyboard()
+        )
         return
     
     if action == 'select_user_for_deletion':
@@ -1023,32 +1088,27 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
         target_id = int(text)
         context.user_data['user_to_delete_reps'] = target_id
         
-        # Показываем отзывы пользователя
         await show_user_reputations_for_deletion(update, target_id)
         context.user_data['admin_action'] = 'waiting_for_rep_selection'
     
-    # 🆕 ОБРАБОТКА ВВОДА ТЕКСТА ДЛЯ РАССЫЛКИ
     elif action == 'broadcast':
         if not text or text.strip() == "":
             await update.message.reply_text("❌ Введите текст для рассылки")
             return
         
-        # Сохраняем текст рассылки
         context.user_data['broadcast_text'] = text.strip()
         
-        # Получаем количество пользователей
         users = get_all_users()
         total = len(users)
         
-        # Показываем предварительный просмотр и запрашиваем подтверждение
         preview = text.strip()
         if len(preview) > 100:
             preview = preview[:97] + "..."
         
         await update.message.reply_text(
-            f"📢 ПРЕДПРОСМОТР РАССЫЛКИ\n\n"
+            f"Предпросмотр рассылки\n\n"
             f"{text.strip()}\n\n"
-            f"📊 Отправить {total} пользователям?\n\n"
+            f"Отправить {total} пользователям?\n\n"
             f"Текст ({len(text.strip())} символов):\n{preview}",
             reply_markup=ReplyKeyboardMarkup([
                 ['✅ Да, отправить', '❌ Нет, отменить']
@@ -1070,32 +1130,28 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> Non
     if data.startswith('admin_delete_rep_'):
         rep_id = int(data.replace('admin_delete_rep_', ''))
         
-        # Сохраняем ID отзыва для удаления
         context.user_data['rep_to_delete'] = rep_id
         
-        # Показываем отзыв и запрашиваем подтверждение
         rep_data = get_reputation_by_id(rep_id)
         if rep_data:
             rep_type = get_reputation_type(rep_data["text"])
-            type_text = "🪄 ПОЛОЖИТЕЛЬНЫЙ" if rep_type == '+' else "🪄 ОТРИЦАТЕЛЬНЫЙ"
+            type_text = "Положительный" if rep_type == '+' else "Отрицательный"
             date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
             
-            message = f"""🪄 Отзыв #{rep_id} ({type_text})
+            message = f"""Отзыв #{rep_id} ({type_text})
 
-🪄 От: {rep_data['from_username']}
-🪄 Кому: id{rep_data['to_user']}
-🪄 Дата: {date}
-🪄 Текст: {rep_data['text'][:100]}...
+От: {rep_data['from_username']}
+Кому: id{rep_data['to_user']}
+Дата: {date}
+Текст: {rep_data['text'][:100]}...
 
 Удалить этот отзыв?"""
             
-            # Удаляем предыдущее сообщение с кнопками
             try:
                 await query.message.delete()
             except:
                 pass
             
-            # Отправляем запрос подтверждения
             await query.message.chat.send_message(
                 message,
                 reply_markup=ReplyKeyboardMarkup([
@@ -1106,24 +1162,22 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> Non
     elif data.startswith('admin_view_rep_'):
         rep_id = int(data.replace('admin_view_rep_', ''))
         
-        # Показываем полный отзыв со скриншотом
         rep_data = get_reputation_by_id(rep_id)
         if rep_data and rep_data['photo_id']:
             rep_type = get_reputation_type(rep_data["text"])
-            type_text = "🪄 ПОЛОЖИТЕЛЬНЫЙ ОТЗЫВ" if rep_type == '+' else "🪄 ОТРИЦАТЕЛЬНЫЙ ОТЗЫВ"
+            type_text = "Положительный отзыв" if rep_type == '+' else "Отрицательный отзыв"
             
             date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
             
             caption = f"""<b>{type_text}</b>
 
-🪄 От: {rep_data['from_username']}
-🪄 ID: {rep_data['from_user'] if rep_data['from_user'] else "Неизвестно"}
-🪄 Дата: {date}
+От: {rep_data['from_username']}
+ID: {rep_data['from_user'] if rep_data['from_user'] else "Неизвестно"}
+Дата: {date}
 
-🪄 Текст:
+Текст:
 {rep_data['text']}"""
             
-            # Показываем фото отзыва
             try:
                 await query.message.chat.send_photo(
                     photo=rep_data['photo_id'],
@@ -1198,17 +1252,14 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str, 
         await query.answer("Отзыв не найден", show_alert=True)
         return
     
-    # Определяем правильный back_context для кнопки "Назад"
     target_user_id = rep_data['to_user']
     current_user_id = query.from_user.id
     
-    # Если пришли из группы и смотрим не свои отзывы
     if context.user_data.get('from_group') and target_user_id != current_user_id:
         back_context = 'back_from_group_view'
     
-    # Форматируем подпись (ЗАМЕНА СМАЙЛОВ НА 🪄)
     rep_type = get_reputation_type(rep_data["text"])
-    type_text = "🪄 ПОЛОЖИТЕЛЬНЫЙ ОТЗЫВ" if rep_type == '+' else "🪄 ОТРИЦАТЕЛЬНЫЙ ОТЗЫВ"
+    type_text = "Положительный отзыв" if rep_type == '+' else "Отрицательный отзыв"
     
     from_username = rep_data["from_username"]
     user_id_display = rep_data["from_user"] if rep_data["from_user"] else "Неизвестно"
@@ -1217,11 +1268,11 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str, 
     
     caption = f"""<b>{type_text}</b>
 
-🪄 От: {from_username}
-🪄 ID: {user_id_display}
-🪄 Дата: {date}
+От: {from_username}
+ID: {user_id_display}
+Дата: {date}
 
-🪄 Текст:
+Текст:
 {rep_data['text']}"""
     
     keyboard = [
@@ -1229,7 +1280,6 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str, 
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Редактируем текущее сообщение, заменяя фото
     try:
         await query.edit_message_media(
             media=InputMediaPhoto(
@@ -1241,7 +1291,6 @@ async def show_reputation_photo(update: Update, rep_id: int, back_context: str, 
         )
     except Exception as e:
         print(f"❌ Ошибка редактирования фото: {e}")
-        # Если не удалось отредактировать фото, пробуем отредактировать текст
         try:
             await query.edit_message_caption(
                 caption=f"{caption}\n\n⚠️ Фото недоступно",
@@ -1264,23 +1313,21 @@ async def show_my_reputation_menu(query, rep_type='all'):
     user_id = query.from_user.id
     stats = get_reputation_stats(user_id)
     
-    # Фильтруем отзывы
     if rep_type == 'positive':
         filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
-        title = "🪄 Положительные отзывы"
+        title = "Положительные отзывы"
     elif rep_type == 'negative':
         filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
-        title = "🪄 Отрицательные отзывы"
+        title = "Отрицательные отзывы"
     else:
         filtered_reps = stats['all_reps']
-        title = "🪄 Все отзывы"
+        title = "Все отзывы"
     
     if not filtered_reps:
         text = f"{title}\n\n📭 Отзывов пока нет"
         keyboard = [[InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')]]
         
         try:
-            # Всегда показываем фото
             await query.edit_message_media(
                 media=InputMediaPhoto(
                     media=PHOTO_URL,
@@ -1298,41 +1345,36 @@ async def show_my_reputation_menu(query, rep_type='all'):
             )
         return
     
-    # Формируем текст и кнопки (ЗАМЕНА СМАЙЛОВ НА 🪄)
     text = f"<b>{title}</b>\n\n"
     keyboard = []
     
     for i, rep in enumerate(filtered_reps[:10], 1):
         rep_type_char = get_reputation_type(rep["text"])
-        emoji = "🪄"  # ЗАМЕНА: было "✅"/"❌"/"📝"
+        emoji = "🪄"
         from_user = rep.get("from_username", f"id{rep['from_user']}")
         date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
         
-        # Обрезаем текст для отображения
         short_text = rep['text']
         if len(short_text) > 40:
             short_text = short_text[:37] + "..."
         
-        text += f"{i}. 🪄 От {from_user}\n"
-        text += f"   🪄 {short_text}\n"
-        text += f"   🪄 {date}\n\n"  # ЗАМЕНА: было "📅 {date}"
+        text += f"{i}. От {from_user}\n"
+        text += f"   {short_text}\n"
+        text += f"   {date}\n\n"
         
-        # Добавляем кнопку для просмотра скрина
         keyboard.append([InlineKeyboardButton(
-            f"🪄 {i}. {from_user} - 🪄 {date}",  # ЗАМЕНА смайлов
+            f"{i}. {from_user} - {date}",
             callback_data=f"view_photo_{rep['id']}_{rep_type}"
         )])
     
     if len(filtered_reps) > 10:
         text += f"\n... и еще {len(filtered_reps) - 10} отзывов"
     
-    # Кнопка возврата
     keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data='my_reputation')])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        # Всегда показываем фото
         await query.edit_message_media(
             media=InputMediaPhoto(
                 media=PHOTO_URL,
@@ -1356,16 +1398,15 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
     
     stats = get_reputation_stats(target_user_id)
     
-    # Фильтруем отзывы
     if rep_type == 'positive':
         filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '+']
-        title = f"🪄 Положительные отзывы @{username}"
+        title = f"Положительные отзывы @{username}"
     elif rep_type == 'negative':
         filtered_reps = [r for r in stats['all_reps'] if get_reputation_type(r["text"]) == '-']
-        title = f"🪄 Отрицательные отзывы @{username}"
+        title = f"Отрицательные отзывы @{username}"
     else:
         filtered_reps = stats['all_reps']
-        title = f"🪄 Все отзывы @{username}"
+        title = f"Все отзывы @{username}"
     
     if not filtered_reps:
         text = f"{title}\n\n📭 Отзывов пока нет"
@@ -1389,35 +1430,31 @@ async def show_found_user_reputation_menu(query, target_user_id, rep_type='all')
             )
         return
     
-    # Формируем текст и кнопки (ЗАМЕНА СМАЙЛОВ НА 🪄)
     text = f"<b>{title}</b>\n\n"
     keyboard = []
     
     for i, rep in enumerate(filtered_reps[:10], 1):
         rep_type_char = get_reputation_type(rep["text"])
-        emoji = "🪄"  # ЗАМЕНА: было "✅"/"❌"/"📝"
+        emoji = "🪄"
         from_user = rep.get("from_username", f"id{rep['from_user']}")
         date = datetime.fromisoformat(rep["created_at"]).strftime("%d/%m/%Y")
         
-        # Обрезаем текст для отображения
         short_text = rep['text']
         if len(short_text) > 40:
             short_text = short_text[:37] + "..."
         
-        text += f"{i}. 🪄 От {from_user}\n"
-        text += f"   🪄 {short_text}\n"
-        text += f"   🪄 {date}\n\n"  # ЗАМЕНА: было "📅 {date}"
+        text += f"{i}. От {from_user}\n"
+        text += f"   {short_text}\n"
+        text += f"   {date}\n\n"
         
-        # Добавляем кнопку для просмотра скрина
         keyboard.append([InlineKeyboardButton(
-            f"🪄 {i}. {from_user} - 🪄 {date}",  # ЗАМЕНА смайлов
+            f"{i}. {from_user} - {date}",
             callback_data=f"found_view_photo_{rep['id']}_{rep_type}"
         )])
     
     if len(filtered_reps) > 10:
         text += f"\n... и еще {len(filtered_reps) - 10} отзывов"
     
-    # Кнопка возврата
     keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data='view_found_user_reputation')])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1444,29 +1481,24 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     await query.answer()
     
-    # 🆕 Обработка админских callback-ов (должно быть ПЕРВЫМ!)
     if query.data.startswith('admin_'):
         await handle_admin_callback(update, context)
         return
     
-    # Обработка просмотра фото для своих отзывов
     if query.data.startswith('view_photo_'):
         parts = query.data.split('_')
         if len(parts) >= 4:
             rep_id = int(parts[2])
             rep_type = parts[3]
-            # Для своих отзывов возвращаемся к соответствующему списку
             back_context = f"back_to_list_{rep_type}"
             await show_reputation_photo(update, rep_id, back_context, context)
         return
     
-    # Обработка возврата к списку (свои отзывы)
     if query.data.startswith('back_to_list_'):
         rep_type = query.data.replace('back_to_list_', '')
         await show_my_reputation_menu(query, rep_type)
         return
     
-    # Обработка возврата из просмотра фото (пришли из группы)
     if query.data == 'back_from_group_view':
         target_user_id = context.user_data.get('found_user_id')
         if target_user_id:
@@ -1475,13 +1507,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             await show_main_menu(query)
         return
     
-    # Обработка просмотра фото для найденных пользователей
     if query.data.startswith('found_view_photo_'):
         parts = query.data.split('_')
         if len(parts) >= 5:
             rep_id = int(parts[3])
             rep_type = parts[4]
-            # Определяем back_context в зависимости от контекста
             if context.user_data.get('from_group'):
                 back_context = 'back_from_group_view'
             else:
@@ -1490,7 +1520,6 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             await show_reputation_photo(update, rep_id, back_context, context)
         return
     
-    # Обработка возврата к списку для найденных пользователей
     if query.data.startswith('found_back_to_list_'):
         parts = query.data.split('_')
         if len(parts) >= 5:
@@ -1602,7 +1631,6 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             await show_profile_pm(query, target_user_id, is_own_profile=False)
     
     else:
-        # Старая логика для остальных кнопок
         await handle_old_button_logic(query, context)
 
 async def show_reputation_selection_menu(query, is_own=True, target_user_id=None):
@@ -1611,18 +1639,18 @@ async def show_reputation_selection_menu(query, is_own=True, target_user_id=None
     
     if is_own:
         keyboard = [
-            [InlineKeyboardButton("🪄 Положительные", callback_data='show_positive')],
-            [InlineKeyboardButton("🪄 Отрицательные", callback_data='show_negative')],
-            [InlineKeyboardButton("🪄 Все", callback_data='show_all')],
-            [InlineKeyboardButton("🪄 Последний положительный", callback_data='show_last_positive')],
-            [InlineKeyboardButton("🪄 Последний отрицательный", callback_data='show_last_negative')],
+            [InlineKeyboardButton("Положительные", callback_data='show_positive')],
+            [InlineKeyboardButton("Отрицательные", callback_data='show_negative')],
+            [InlineKeyboardButton("Все", callback_data='show_all')],
+            [InlineKeyboardButton("Последний положительный", callback_data='show_last_positive')],
+            [InlineKeyboardButton("Последний отрицательный", callback_data='show_last_negative')],
             [InlineKeyboardButton("↩️ Назад", callback_data='profile')]
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("🪄 Положительные", callback_data='found_show_positive')],
-            [InlineKeyboardButton("🪄 Отрицательные", callback_data='found_show_negative')],
-            [InlineKeyboardButton("🪄 Все", callback_data='found_show_all')],
+            [InlineKeyboardButton("Положительные", callback_data='found_show_positive')],
+            [InlineKeyboardButton("Отрицательные", callback_data='found_show_negative')],
+            [InlineKeyboardButton("Все", callback_data='found_show_all')],
             [InlineKeyboardButton("↩️ Назад", callback_data='back_to_found_profile')]
         ]
     
@@ -1647,10 +1675,10 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
     
     if is_positive:
         rep_data = get_last_positive(user_id)
-        title = "🪄 Последний положительный отзыв"
+        title = "Последний положительный отзыв"
     else:
         rep_data = get_last_negative(user_id)
-        title = "🪄 Последний отрицательный отзыв"
+        title = "Последний отрицательный отзыв"
     
     if not rep_data:
         text = f"{title}\n\n📭 Отзывов пока нет"
@@ -1670,25 +1698,22 @@ async def handle_last_reputation(query, is_positive=True, is_own=True):
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         return
     
-    # Показываем информацию о последнем отзыве (ЗАМЕНА СМАЙЛОВ)
     from_username = rep_data.get("from_username", f"id{rep_data['from_user']}")
     date = datetime.fromisoformat(rep_data["created_at"]).strftime("%d/%m/%Y %H:%M")
     rep_type = get_reputation_type(rep_data["text"])
-    emoji = "🪄"  # ЗАМЕНА: было "✅"/"❌"/"📝"
     
     text = f"""<b>{title}</b>
 
-🪄 От: {from_username}
-🪄 Дата: {date}  # ЗАМЕНА: было "📅 Дата: {date}"
+От: {from_username}
+Дата: {date}
 
-🪄 Текст:
+Текст:
 {rep_data['text']}"""
     
-    # Добавляем кнопку для просмотра скрина
     callback_type = 'view_photo_' if is_own else 'found_view_photo_'
     rep_type_str = 'positive' if is_positive else 'negative'
     keyboard = [
-        [InlineKeyboardButton("🪄 Посмотреть скрин", callback_data=f"{callback_type}{rep_data['id']}_{rep_type_str}")],
+        [InlineKeyboardButton("Посмотреть скрин", callback_data=f"{callback_type}{rep_data['id']}_{rep_type_str}")],
         [InlineKeyboardButton("↩️ Назад", callback_data='my_reputation' if is_own else 'view_found_user_reputation')]
     ]
     
@@ -1745,7 +1770,7 @@ async def show_profile_pm(query, user_id, is_own_profile=True):
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
+            [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
             [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')],
             [InlineKeyboardButton("↩️ Назад", callback_data='search_user')]
         ]
@@ -1810,43 +1835,36 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
     
     user_id = update.effective_user.id
     
-    # 🆕 ПРОВЕРКА АДМИНСКИХ КОМАНД
     if update.message.chat.type == 'private' and user_id in ADMINS:
         text = update.message.text or ""
         
-        # Обработка кнопки админ-панели
-        if text == "🪄 АДМИН ПАНЕЛЬ":
+        if text == "Админ панель":
             await handle_admin_panel(update, context)
             return
         
-        # Обработка меню админ-панели (ДОБАВЛЕНО "❌ Отмена")
         admin_menu_commands = [
-            "🗑 Удалить отзыв", "📊 Статистика", "📢 Рассылка", "⬅️ Главная",
-            "💾 Бэкап", "🔄 Восстановить",
-            "✅ Да, удалить", "❌ Нет", "❌ Отмена",  # 🔥 ДОБАВЛЕНО
-            "✅ Да, отправить", "❌ Нет, отменить",  # 🆕 ДОБАВЛЕНО для рассылки
-            "✅ Да, восстановить", "❌ Нет, отменить"  # 🆕 ДОБАВЛЕНО для восстановления
+            "Удалить отзыв", "Статистика", "Рассылка", "Главное меню",
+            "Создать бэкап", "Восстановить", "Автоочистка",
+            "✅ Да, удалить", "❌ Нет", "❌ Отмена",
+            "✅ Да, отправить", "❌ Нет, отменить",
+            "Да, восстановить", "Нет, отменить"
         ]
         
         if text in admin_menu_commands:
             await handle_admin_menu(update, context)
             return
         
-        # Обработка ввода админа (ID и т.д.)
         if 'admin_action' in context.user_data or 'awaiting_backup_choice' in context.user_data:
             await handle_admin_input(update, context)
             return
     
-    # Сохраняем всех пользователей (оригинальная логика)
     if update.message.from_user:
         save_user(update.message.from_user.id, update.message.from_user.username or "")
     
-    # Сохраняем пользователя из реплая
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         reply_user = update.message.reply_to_message.from_user
         save_user(reply_user.id, reply_user.username or "")
     
-    # Сохраняем оригинального отправителя пересланного сообщения
     if update.message.forward_from:
         save_user(update.message.forward_from.id, update.message.forward_from.username or "")
     
@@ -1862,23 +1880,19 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
 async def handle_group_reputation(update: Update, context: CallbackContext) -> None:
     """Обработка репутации в групповом чате"""
     
-    # Определяем, кто реальный отправитель
     if update.message.forward_from:
-        # Сообщение переслано от другого пользователя
         original_user = update.message.forward_from
         is_forwarded = True
         from_username = original_user.username or f"id{original_user.id}"
         from_user_id = original_user.id
         print(f"🔍 Сообщение ПЕРЕСЛАНО от: {from_username}")
     elif update.message.forward_sender_name:
-        # РАЗРЕШАЕМ пересылку от скрытых пользователей!
         original_user = None
         is_forwarded = True
         from_username = f"{update.message.forward_sender_name} (скрытый)"
         from_user_id = None
         print(f"🔍 Сообщение переслано от скрытого пользователя: {from_username}")
     else:
-        # Обычное сообщение
         original_user = update.message.from_user
         is_forwarded = False
         from_username = original_user.username or f"id{original_user.id}"
@@ -1886,7 +1900,6 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     text = update.message.text or update.message.caption or ""
     
-    # ОТЛАДКА
     print(f"\n{'='*60}")
     print(f"🔍 ПОЛУЧЕНО СООБЩЕНИЕ В ГРУППЕ")
     print(f"👤 Отправитель: {from_username} (ID: {from_user_id})")
@@ -1895,7 +1908,6 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     print(f"📷 Есть фото: {bool(update.message.photo)}")
     print(f"{'='*60}")
     
-    # Проверяем, является ли это командой репутации
     is_rep_command = is_reputation_command(text)
     
     print(f"🔍 Поиск +rep/-rep: {'НАЙДЕНО' if is_rep_command else 'НЕ НАЙДЕНО'}")
@@ -1913,7 +1925,6 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     target_identifier = None
     
-    # Улучшенные паттерны поиска пользователя
     patterns = [
         r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*@?([a-zA-Z0-9_]+)',
         r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*(\d+)',
@@ -1959,7 +1970,6 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     print(f"🎯 Целевой пользователь: {target_info['username']} (ID: {target_info['id']})")
     
-    # Проверяем, не пытается ли пользователь отправить репутацию самому себе
     if from_user_id and target_info["id"] == from_user_id:
         print(f"❌ Попытка отправить репутацию себе")
         await update.message.reply_text("❌ <b>Нельзя отправлять репутацию самому себе</b>", parse_mode='HTML')
@@ -1968,7 +1978,7 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     print(f"💾 Сохраняем репутацию...")
     
     save_reputation(
-        from_user=from_user_id,  # Может быть None для скрытых пользователей
+        from_user=from_user_id,
         from_username=from_username,
         to_user=target_info["id"],
         to_username=target_info["username"],
@@ -1978,7 +1988,6 @@ async def handle_group_reputation(update: Update, context: CallbackContext) -> N
     
     print(f"✅ Репутация успешно сохранена!")
     
-    # Отвечаем тому, кто отправил сообщение в чат
     await update.message.reply_text("✅ <b>Репутация сохранена</b>", parse_mode='HTML')
 
 async def handle_reputation_message_pm(update: Update, context: CallbackContext) -> None:
@@ -1994,9 +2003,8 @@ async def handle_reputation_message_pm(update: Update, context: CallbackContext)
         await update.message.reply_text("❌ <b>Добавьте текст к фото!</b>\n\nПример: +rep @username сделка прошла успешно", parse_mode='HTML')
         return
     
-    # Улучшенные паттерны поиска
     patterns = [
-        r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*@?([a-zA-Z0-9_]+)',
+        r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*@?([a-zAZ0-9_]+)',
         r'[+-]\s*(?:rep|реп|рп)[\s:;,.-]*(\d+)',
         r'@?([a-zA-Z0-9_]+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
         r'(\d+)[\s:;,.-]*[+-]\s*(?:rep|реп|рп)',
@@ -2107,7 +2115,7 @@ async def handle_search_message_pm(update: Update, context: CallbackContext) -> 
 🗓️ Зарегистрирован: {registration_date}"""
     
     keyboard = [
-        [InlineKeyboardButton("🪄 Посмотреть репутацию", callback_data='view_found_user_reputation')],
+        [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
         [InlineKeyboardButton("↩️ Назад", callback_data='search_user')]
     ]
     
@@ -2127,7 +2135,14 @@ def main():
     print(f"✅ DATABASE_URL: {'Установлен' if DATABASE_URL else 'Отсутствует!'}")
     print(f"✅ URL фото: {PHOTO_URL}")
     print(f"✅ Админы: {len(ADMINS)} пользователей")
-    print(f"✅ Резервное копирование: Добавлено 💾")
+    
+    print("\n🔍 Проверка базы данных...")
+    check_database_connection()
+    
+    print(f"\n✅ Резервное копирование: Добавлено")
+    print(f"   - Создание бэкапов")
+    print(f"   - Восстановление из бэкапов")
+    print(f"   - Автоочистка (оставляет 1 последний)")
     
     # Инициализация БД
     init_db()
