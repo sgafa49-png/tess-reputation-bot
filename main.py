@@ -2287,9 +2287,7 @@ def main():
     
     # Команды для чатов (групп)
     app.add_handler(CommandHandler("v", quick_profile))
-    app.add_handler(CommandHandler("rep", quick_profile))
-    app.add_handler(CommandHandler("profile", quick_profile))
-    
+    app.add_handler(CommandHandler("и", quick_profile))
     # Обработчики кнопок
     app.add_handler(CallbackQueryHandler(button_handler))
     
