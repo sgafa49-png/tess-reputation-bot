@@ -778,6 +778,14 @@ backup_manager = SimpleBackup()
 # ========== ТЕЛЕГРАМ HANDLERS ==========
 async def quick_profile(update: Update, context: CallbackContext) -> None:
     """Быстрый просмотр профиля в чате"""
+# Найдите функцию quick_profile и добавьте ПОСЛЕ нее:
+
+async def handle_fake_i_command(update: Update, context: CallbackContext):
+    """Эмуляция команды /и (работает только в группах)"""
+    if update.message.chat.type == 'private':
+        return  # Не работаем в личке
+    await quick_profile(update, context)  # Используем ту же логику
+    
     user_id = update.effective_user.id
     
     if update.message.reply_to_message:
@@ -2286,8 +2294,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     
     # Команды для чатов (групп)
-    app.add_handler(CommandHandler("v", quick_profile))
-    app.add_handler(CommandHandler("и", quick_profile))
+    app.add_handler(CommandHandler("i", quick_profile))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^/и\b'), handle_fake_i_command))
     # Обработчики кнопок
     app.add_handler(CallbackQueryHandler(button_handler))
     
