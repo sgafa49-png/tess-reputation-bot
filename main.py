@@ -2,6 +2,8 @@ import os
 import re
 import sys
 import psycopg2
+import glob
+import subprocess
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -35,11 +37,12 @@ def get_admin_keyboard():
     ], resize_keyboard=True, one_time_keyboard=False)
 
 def get_admin_menu_keyboard():
-    """Меню админ-панели"""
+    """Меню админ-панели с бэкапом"""
     return ReplyKeyboardMarkup([
-        ['Удалить отзыв'],
-        ['Статистика', '📢 Пост в бота'],
-        ['Главное меню']
+        ['🗑 Удалить отзыв'],
+        ['📊 Статистика', '📢 Пост в бота'],
+        ['💾 Бэкап', '🔄 Восстановить'],
+        ['⬅️ Главная']
     ], resize_keyboard=True, one_time_keyboard=False)
 
 # ========== КОНСТАНТЫ ДЛЯ РЕПУТАЦИИ ==========
@@ -426,6 +429,189 @@ def get_last_negative(user_id):
             return rep
     return None
 
+# ========== РЕЗЕРВНОЕ КОПИРОВАНИЕ ==========
+class SimpleBackup:
+    def __init__(self):
+        self.backup_dir = "database_backups"
+        os.makedirs(self.backup_dir, exist_ok=True)
+    
+    async def create_backup(self, update: Update, context: CallbackContext):
+        """Создать бэкап базы данных"""
+        user_id = update.effective_user.id
+        
+        if user_id not in ADMINS:
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        
+        msg = await update.message.reply_text("💾 Создание бэкапа...")
+        
+        try:
+            timestamp = datetime.now().strftime("%d%m%y_%H%M")
+            filename = f"backup_{timestamp}.sql.gz"
+            filepath = os.path.join(self.backup_dir, filename)
+            
+            # Команда создания дампа
+            cmd = f'pg_dump "{DATABASE_URL}" | gzip > "{filepath}"'
+            
+            # Запускаем процесс
+            env = os.environ.copy()
+            result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode == 0:
+                size_mb = os.path.getsize(filepath) / (1024 * 1024)
+                
+                # Очищаем старые бэкапы (оставляем 10 последних)
+                self._cleanup_old_backups()
+                
+                await msg.edit_text(
+                    f"✅ Бэкап создан\n"
+                    f"📁 {filename}\n"
+                    f"📦 {size_mb:.1f} MB\n"
+                    f"🗓 {datetime.now().strftime('%d.%m %H:%M')}"
+                )
+            else:
+                error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
+                await msg.edit_text(f"❌ Ошибка:\n{error_msg}")
+                
+        except subprocess.TimeoutExpired:
+            await msg.edit_text("❌ Таймаут: операция заняла слишком много времени")
+        except Exception as e:
+            await msg.edit_text(f"❌ Ошибка: {str(e)[:150]}")
+    
+    async def show_backups(self, update: Update, context: CallbackContext):
+        """Показать список доступных бэкапов"""
+        user_id = update.effective_user.id
+        
+        if user_id not in ADMINS:
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        
+        backups = glob.glob(os.path.join(self.backup_dir, "*.sql.gz"))
+        backups.sort(key=os.path.getmtime, reverse=True)
+        
+        if not backups:
+            await update.message.reply_text("📭 Бэкапов нет")
+            return
+        
+        text = "📂 Доступные бэкапы:\n\n"
+        for i, backup in enumerate(backups[:5], 1):
+            name = os.path.basename(backup)[7:-7]  # "backup_" и ".sql.gz"
+            size = os.path.getsize(backup) / (1024 * 1024)
+            date = datetime.fromtimestamp(os.path.getmtime(backup)).strftime('%d.%m %H:%M')
+            text += f"{i}. {name} ({size:.1f} MB) - {date}\n"
+        
+        text += "\nВведите номер для восстановления:"
+        
+        await update.message.reply_text(text)
+        context.user_data['awaiting_backup_choice'] = True
+    
+    async def restore_backup(self, update: Update, context: CallbackContext):
+        """Восстановить базу из бэкапа"""
+        user_id = update.effective_user.id
+        
+        if user_id not in ADMINS:
+            await update.message.reply_text("❌ Доступ запрещен")
+            return
+        
+        choice = update.message.text.strip()
+        
+        if not choice.isdigit():
+            await update.message.reply_text("❌ Введите номер бэкапа")
+            return
+        
+        backups = glob.glob(os.path.join(self.backup_dir, "*.sql.gz"))
+        backups.sort(key=os.path.getmtime, reverse=True)
+        
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(backups):
+            await update.message.reply_text("❌ Неверный номер")
+            return
+        
+        backup_file = backups[idx]
+        filename = os.path.basename(backup_file)
+        
+        # Запрашиваем подтверждение
+        keyboard = ReplyKeyboardMarkup([
+            ['✅ Да, восстановить'],
+            ['❌ Нет, отменить']
+        ], resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"⚠️ Восстановить из:\n{filename}?",
+            reply_markup=keyboard
+        )
+        
+        context.user_data['restore_file'] = backup_file
+        context.user_data['admin_action'] = 'confirm_restore'
+    
+    async def perform_restore(self, update: Update, context: CallbackContext):
+        """Выполнить восстановление базы"""
+        backup_file = context.user_data.get('restore_file')
+        
+        if not backup_file or not os.path.exists(backup_file):
+            await update.message.reply_text(
+                "❌ Файл бэкапа не найден",
+                reply_markup=get_admin_menu_keyboard()
+            )
+            context.user_data.pop('restore_file', None)
+            context.user_data.pop('admin_action', None)
+            return
+        
+        msg = await update.message.reply_text("🔄 Восстановление...")
+        
+        try:
+            # Команда восстановления
+            cmd = f'gunzip -c "{backup_file}" | psql "{DATABASE_URL}"'
+            
+            env = os.environ.copy()
+            result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True, timeout=600)
+            
+            if result.returncode == 0:
+                await msg.edit_text(
+                    "✅ База восстановлена",
+                    reply_markup=get_admin_menu_keyboard()
+                )
+            else:
+                error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
+                await msg.edit_text(
+                    f"❌ Ошибка:\n{error_msg}",
+                    reply_markup=get_admin_menu_keyboard()
+                )
+                
+        except subprocess.TimeoutExpired:
+            await msg.edit_text(
+                "❌ Таймаут: восстановление заняло слишком много времени",
+                reply_markup=get_admin_menu_keyboard()
+            )
+        except Exception as e:
+            await msg.edit_text(
+                f"❌ Ошибка: {str(e)[:150]}",
+                reply_markup=get_admin_menu_keyboard()
+            )
+        
+        # Очищаем данные
+        context.user_data.pop('restore_file', None)
+        context.user_data.pop('admin_action', None)
+    
+    def _cleanup_old_backups(self, keep_last=10):
+        """Очистить старые бэкапы"""
+        try:
+            backups = glob.glob(os.path.join(self.backup_dir, "*.sql.gz"))
+            backups.sort(key=os.path.getmtime, reverse=True)
+            
+            if len(backups) > keep_last:
+                for old_backup in backups[keep_last:]:
+                    try:
+                        os.remove(old_backup)
+                        print(f"🗑️ Удален старый бэкап: {os.path.basename(old_backup)}")
+                    except:
+                        pass
+        except Exception as e:
+            print(f"⚠️ Ошибка очистки бэкапов: {e}")
+
+# Создаем глобальный объект для бэкапов
+backup_manager = SimpleBackup()
+
 # ========== ТЕЛЕГРАМ HANDLERS ==========
 async def quick_profile(update: Update, context: CallbackContext) -> None:
     """Быстрый просмотр профиля в чате"""
@@ -589,7 +775,7 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         return
     
-    if text == "Главное меню":
+    if text == "⬅️ Главная":
         # Возвращаемся к главной клавиатуре админа
         await update.message.reply_text(
             "🪄 Возврат в главное меню",
@@ -597,7 +783,7 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         return
     
-    if text == "Удалить отзыв":
+    if text == "🗑 Удалить отзыв":
         context.user_data['admin_action'] = 'select_user_for_deletion'
         await update.message.reply_text(
             "🪄 Введите ID пользователя, чьи отзывы хотите удалить:\n\n(или отправьте ❌ Отмена)",
@@ -605,7 +791,7 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         return
     
-    if text == "Статистика":
+    if text == "📊 Статистика":
         stats = get_db_stats()
         message = f"""🪄 СТАТИСТИКА БАЗЫ ДАННЫХ
 
@@ -724,6 +910,30 @@ async def handle_admin_menu(update: Update, context: CallbackContext) -> None:
         )
         context.user_data.pop('admin_action', None)
         context.user_data.pop('broadcast_text', None)
+    
+    # 🆕 ОБРАБОТКА КНОПОК БЭКАПА
+    elif text == "💾 Бэкап":
+        await backup_manager.create_backup(update, context)
+        return
+    
+    elif text == "🔄 Восстановить":
+        await backup_manager.show_backups(update, context)
+        return
+    
+    # 🆕 ОБРАБОТКА ПОДТВЕРЖДЕНИЯ ВОССТАНОВЛЕНИЯ
+    elif text == "✅ Да, восстановить":
+        if context.user_data.get('admin_action') == 'confirm_restore':
+            await backup_manager.perform_restore(update, context)
+        return
+    
+    elif text == "❌ Нет, отменить":
+        await update.message.reply_text(
+            "🔄 Восстановление отменено",
+            reply_markup=get_admin_menu_keyboard()
+        )
+        context.user_data.pop('admin_action', None)
+        context.user_data.pop('restore_file', None)
+        return
 
 async def show_user_reputations_for_deletion(update: Update, user_id: int):
     """Показать отзывы пользователя с кнопками удаления"""
@@ -797,6 +1007,12 @@ async def handle_admin_input(update: Update, context: CallbackContext) -> None:
             "🪄 Выберите действие в меню:",
             reply_markup=get_admin_menu_keyboard()
         )
+        return
+    
+    # 🆕 ОБРАБОТКА ВЫБОРА БЭКАПА
+    if context.user_data.get('awaiting_backup_choice'):
+        await backup_manager.restore_backup(update, context)
+        context.user_data.pop('awaiting_backup_choice', None)
         return
     
     if action == 'select_user_for_deletion':
@@ -1605,9 +1821,11 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
         
         # Обработка меню админ-панели (ДОБАВЛЕНО "❌ Отмена")
         admin_menu_commands = [
-            "Удалить отзыв", "Статистика", "📢 Пост в бота", "Главное меню",
+            "🗑 Удалить отзыв", "📊 Статистика", "📢 Рассылка", "⬅️ Главная",
+            "💾 Бэкап", "🔄 Восстановить",
             "✅ Да, удалить", "❌ Нет", "❌ Отмена",  # 🔥 ДОБАВЛЕНО
-            "✅ Да, отправить", "❌ Нет, отменить"  # 🆕 ДОБАВЛЕНО для рассылки
+            "✅ Да, отправить", "❌ Нет, отменить",  # 🆕 ДОБАВЛЕНО для рассылки
+            "✅ Да, восстановить", "❌ Нет, отменить"  # 🆕 ДОБАВЛЕНО для восстановления
         ]
         
         if text in admin_menu_commands:
@@ -1615,7 +1833,7 @@ async def handle_all_messages(update: Update, context: CallbackContext) -> None:
             return
         
         # Обработка ввода админа (ID и т.д.)
-        if 'admin_action' in context.user_data:
+        if 'admin_action' in context.user_data or 'awaiting_backup_choice' in context.user_data:
             await handle_admin_input(update, context)
             return
     
@@ -1909,6 +2127,7 @@ def main():
     print(f"✅ DATABASE_URL: {'Установлен' if DATABASE_URL else 'Отсутствует!'}")
     print(f"✅ URL фото: {PHOTO_URL}")
     print(f"✅ Админы: {len(ADMINS)} пользователей")
+    print(f"✅ Резервное копирование: Добавлено 💾")
     
     # Инициализация БД
     init_db()
