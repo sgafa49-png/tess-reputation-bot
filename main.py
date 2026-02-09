@@ -883,11 +883,17 @@ backup_manager = SimpleBackup()
 async def quick_profile(update: Update, context: CallbackContext) -> None:
     """Быстрый просмотр профиля в чате - команда /и"""
     if update.message.chat.type == 'private':
-        # В личных сообщениях не работает
         return
     
     user_id = update.effective_user.id
     username = update.effective_user.username or f"id{user_id}"
+    
+    # Отладочная информация
+    print(f"\n{'='*50}")
+    print(f"🔍 КОМАНДА /и ВЫЗВАНА")
+    print(f"👤 Пользователь: {username} (ID: {user_id})")
+    print(f"📝 Аргументы context.args: {context.args}")
+    print(f"📝 Длина аргументов: {len(context.args) if context.args else 0}")
     
     # Сохраняем текущего пользователя
     save_user(user_id, username)
@@ -896,23 +902,28 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     target_user_id = None
     target_username = None
     
-    # Проверяем аргументы команды
+    # ПРОВЕРЯЕМ аргументы команды (это самое важное!)
     if context.args and len(context.args) > 0:
         arg = context.args[0].strip()
+        print(f"✅ Найден аргумент: '{arg}'")
         
         # Вариант 1: ID пользователя
         if arg.isdigit():
             target_user_id = int(arg)
             target_username = f"id{target_user_id}"
+            print(f"🔢 Определили как ID: {target_user_id}")
         
         # Вариант 2: @username
         elif arg.startswith('@'):
             username_search = arg[1:]  # Убираем @
+            print(f"👤 Ищем пользователя по username: {username_search}")
             user_info = get_user_by_username(username_search)
             if user_info:
                 target_user_id = user_info['user_id']
                 target_username = user_info['username'] or f"id{target_user_id}"
+                print(f"✅ Найден пользователь: {target_username} (ID: {target_user_id})")
             else:
+                print(f"❌ Пользователь не найден в базе")
                 await update.message.reply_text(
                     "❌ Пользователь не найден в базе\n\n"
                     "Отправьте репутацию этому пользователю, чтобы добавить его в базу.",
@@ -922,33 +933,45 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
         
         # Вариант 3: username без @
         else:
+            print(f"👤 Ищем пользователя по username (без @): {arg}")
             user_info = get_user_by_username(arg)
             if user_info:
                 target_user_id = user_info['user_id']
                 target_username = user_info['username'] or f"id{target_user_id}"
+                print(f"✅ Найден пользователь: {target_username} (ID: {target_user_id})")
             else:
                 # Проверяем, может быть это ID без @
                 if arg.startswith('id') and arg[2:].isdigit():
                     target_user_id = int(arg[2:])
                     target_username = arg
+                    print(f"🔢 Определили как ID (с префиксом 'id'): {target_user_id}")
                 else:
+                    print(f"❌ Пользователь не найден")
                     await update.message.reply_text(
                         "❌ Пользователь не найден в базе\n\n"
                         "Отправьте репутацию этому пользователю, чтобы добавить его в базу.",
                         parse_mode='HTML'
                     )
                     return
+    else:
+        print(f"⚠️ Аргументов нет")
     
     # Если нет аргументов, проверяем реплай
-    elif update.message.reply_to_message:
+    if not target_user_id and update.message.reply_to_message:
+        print(f"🔁 Проверяем реплай")
         target_user = update.message.reply_to_message.from_user
         target_user_id = target_user.id
         target_username = target_user.username or f"id{target_user_id}"
+        print(f"✅ Реплай на пользователя: {target_username} (ID: {target_user_id})")
     
     # Если нет ни аргументов, ни реплая - показываем профиль автора
-    else:
+    if not target_user_id:
         target_user_id = user_id
         target_username = username
+        print(f"👤 Показываем профиль автора: {target_username} (ID: {target_user_id})")
+    
+    print(f"🎯 Итоговый целевой пользователь: {target_username} (ID: {target_user_id})")
+    print(f"{'='*50}\n")
     
     # Сохраняем целевого пользователя
     save_user(target_user_id, target_username)
@@ -998,12 +1021,6 @@ async def quick_profile(update: Update, context: CallbackContext) -> None:
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
-
-async def handle_fake_i_command(update: Update, context: CallbackContext):
-    """Эмуляция команды /и (работает только в группах)"""
-    if update.message.chat.type == 'private':
-        return  # Не работаем в личке
-    await quick_profile(update, context)  # Используем ту же логику
     
 async def start(update: Update, context: CallbackContext) -> None:
     """Команда /start в личных сообщениях"""
