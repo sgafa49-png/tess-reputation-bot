@@ -961,11 +961,12 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
             user_info = get_user_by_username(username)
             
             if not user_info:
+                # ВАЖНО: Не показываем свой профиль! Сообщаем об ошибке
                 await update.message.reply_text(
                     f"❌ Пользователь @{username} не найден в базе",
                     parse_mode='HTML'
                 )
-                return
+                return  # ПРЕКРАЩАЕМ ВЫПОЛНЕНИЕ ФУНКЦИИ
             
             target_user_id = user_info['user_id']
             target_username = user_info['username'] or f"id{target_user_id}"
@@ -2584,7 +2585,7 @@ def main():
     print("🚀 Бот запускается...")
     print("=" * 60)
     
-    # Запускаем бота с сбросом старыв обновлений
+    # Запускаем бота с сбросом старых обновлений
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True
