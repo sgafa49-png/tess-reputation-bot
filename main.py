@@ -403,14 +403,15 @@ def get_user_info(user_id):
     return None
 
 def get_user_by_username(username):
-    """Ищем пользователя по username"""
+    """Ищем пользователя по username (без учета регистра)"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     username = username.lstrip('@')
     
     try:
-        cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
+        # Используем ILIKE для поиска без учета регистра
+        cursor.execute('SELECT * FROM users WHERE username ILIKE %s', (username,))
         row = cursor.fetchone()
         
         if row:
@@ -765,6 +766,7 @@ class SimpleBackup:
                 reply_markup=get_backup_menu_keyboard()
             )
             return
+    
     async def perform_restore(self, update: Update, context: CallbackContext):
         backup_file = context.user_data.get('restore_file')
         
@@ -881,42 +883,89 @@ backup_manager = SimpleBackup()
 
 # ========== ТЕЛЕГРАМ HANDLERS ==========
 async def quick_profile(update: Update, context: CallbackContext) -> None:
-    """Быстрый просмотр профиля в чате"""
-# Найдите функцию quick_profile и добавьте ПОСЛЕ нее:
+    """Быстрый просмотр профиля в чате (собственный профиль)"""
+    if update.message.chat.type == 'private':
+        return
+    
+    user_id = update.effective_user.id
+    username = update.effective_user.username or ""
+    
+    save_user(user_id, username)
+    
+    user_info = get_user_info(user_id)
+    stats = get_reputation_stats(user_id)
+    
+    display_username = f"👤@{username}" if username else f"👤id{user_id}"
+    
+    if user_info and user_info.get("registered_at"):
+        try:
+            reg_date = datetime.fromisoformat(user_info["registered_at"])
+            registration_date = reg_date.strftime("%d/%m/%Y")
+        except:
+            registration_date = datetime.now().strftime("%d/%m/%Y")
+    else:
+        registration_date = datetime.now().strftime("%d/%m/%Y")
+    
+    text = f"""{display_username} (ID: {user_id})
+
+<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
+
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>
+
+💳 Депозит: отсутствует
+
+🗓️ Зарегистрирован: {registration_date}"""
+    
+    keyboard = [
+        [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{user_id}")],
+        [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def handle_fake_i_command(update: Update, context: CallbackContext):
     """Эмуляция команды /и (работает только в группах)"""
     if update.message.chat.type == 'private':
         return  # Не работаем в личке
-    await quick_profile(update, context)  # Используем ту же логику
     
     user_id = update.effective_user.id
     
     if update.message.reply_to_message:
+        # Реплай на сообщение - показываем профиль того, чье сообщение цитируем
         target_user = update.message.reply_to_message.from_user
         target_user_id = target_user.id
         target_username = target_user.username or f"id{target_user_id}"
         save_user(target_user_id, target_username)
         
     elif context.args and len(context.args) > 0:
+        # Аргумент после команды (/и @username или /и 123456)
         arg = context.args[0].strip()
         
         if arg.isdigit():
+            # Это ID пользователя
             target_user_id = int(arg)
             target_username = f"id{target_user_id}"
         else:
+            # Это username
             username = arg.lstrip('@')
             user_info = get_user_by_username(username)
             if user_info:
                 target_user_id = user_info['user_id']
                 target_username = user_info['username'] or f"id{target_user_id}"
             else:
-                await update.message.reply_text("❌ Пользователь не найден", parse_mode='HTML')
+                # Пользователь не найден в базе - показываем информационное сообщение
+                await update.message.reply_text(f"❌ Пользователь @{username} не найден в базе бота", parse_mode='HTML')
                 return
     else:
+        # Без аргументов - показываем свой профиль
         target_user_id = user_id
         target_username = update.effective_user.username or f"id{user_id}"
     
+    # Сохраняем пользователя если его нет в базе
+    save_user(target_user_id, target_username)
+    
+    # Получаем информацию о пользователе
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
     
@@ -941,23 +990,11 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
 
 🗓️ Зарегистрирован: {registration_date}"""
     
-    if update.message.chat.type in ['group', 'supergroup']:
-        keyboard = [
-            [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")],
-            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
-        ]
-    else:
-        if target_user_id != user_id:
-            context.user_data['found_user_id'] = target_user_id
-            keyboard = [
-                [InlineKeyboardButton("Посмотреть репутацию", callback_data='view_found_user_reputation')],
-                [InlineKeyboardButton("✍️ Отправить репутацию", callback_data='send_reputation')]
-            ]
-        else:
-            keyboard = [
-                [InlineKeyboardButton("🏆 Моя репутация", callback_data='my_reputation')],
-                [InlineKeyboardButton("🏆 Мой профиль", callback_data='profile')]
-            ]
+    # Кнопки для группы
+    keyboard = [
+        [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")],
+        [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
+    ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
