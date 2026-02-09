@@ -931,12 +931,12 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
     
     user_id = update.effective_user.id
     
+    # Определяем целевого пользователя
     if update.message.reply_to_message:
         # Реплай на сообщение - показываем профиль того, чье сообщение цитируем
         target_user = update.message.reply_to_message.from_user
         target_user_id = target_user.id
         target_username = target_user.username or f"id{target_user_id}"
-        save_user(target_user_id, target_username)
         
     elif context.args and len(context.args) > 0:
         # Аргумент после команды (/и @username или /и 123456)
@@ -946,26 +946,38 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
             # Это ID пользователя
             target_user_id = int(arg)
             target_username = f"id{target_user_id}"
+            
+            # Проверяем, есть ли пользователь с таким ID в базе
+            user_info = get_user_info(target_user_id)
+            if not user_info:
+                await update.message.reply_text(
+                    f"❌ Пользователь с ID {target_user_id} не найден в базе",
+                    parse_mode='HTML'
+                )
+                return
         else:
             # Это username
             username = arg.lstrip('@')
             user_info = get_user_by_username(username)
-            if user_info:
-                target_user_id = user_info['user_id']
-                target_username = user_info['username'] or f"id{target_user_id}"
-            else:
-                # Пользователь не найден в базе - показываем информационное сообщение
-                await update.message.reply_text(f"❌ Пользователь @{username} не найден в базе бота", parse_mode='HTML')
+            
+            if not user_info:
+                await update.message.reply_text(
+                    f"❌ Пользователь @{username} не найден в базе",
+                    parse_mode='HTML'
+                )
                 return
+            
+            target_user_id = user_info['user_id']
+            target_username = user_info['username'] or f"id{target_user_id}"
     else:
         # Без аргументов - показываем свой профиль
         target_user_id = user_id
         target_username = update.effective_user.username or f"id{user_id}"
     
-    # Сохраняем пользователя если его нет в базе
+    # Сохраняем пользователя если его нет в базе (только для своего профиля или реплая)
     save_user(target_user_id, target_username)
     
-    # Получаем информацию о пользователе
+    # Показываем профиль
     user_info = get_user_info(target_user_id)
     stats = get_reputation_stats(target_user_id)
     
@@ -2572,7 +2584,7 @@ def main():
     print("🚀 Бот запускается...")
     print("=" * 60)
     
-    # Запускаем бота с сбросом старых обновлений
+    # Запускаем бота с сбросом старыв обновлений
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True
