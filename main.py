@@ -408,6 +408,7 @@ def get_user_by_username(username):
     cursor = conn.cursor()
     
     username = username.lstrip('@')
+    print(f"🔄 Поиск в БД: username='{username}'")
     
     try:
         # Используем ILIKE для поиска без учета регистра
@@ -415,17 +416,20 @@ def get_user_by_username(username):
         row = cursor.fetchone()
         
         if row:
+            print(f"✅ Найден в БД: ID={row[0]}, username='{row[1]}'")
             return {
                 'user_id': row[0],
                 'username': row[1],
                 'registered_at': row[2]
             }
+        else:
+            print(f"❌ Не найден в БД: username='{username}'")
+            return None
     except Exception as e:
         print(f"❌ Ошибка поиска пользователя {username}: {e}")
+        return None
     finally:
         conn.close()
-    
-    return None
 
 def get_reputation_stats(user_id):
     """Статистика репутации пользователя"""
@@ -930,72 +934,118 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
         return  # Не работаем в личке
     
     user_id = update.effective_user.id
+    message_text = update.message.text
     
-    print(f"🔍 Команда /и с аргументами: {context.args}")
+    print(f"🔍 Получено сообщение: '{message_text}'")
     
-    # Определяем целевого пользователя
-    if update.message.reply_to_message:
-        # Реплай на сообщение - показываем профиль того, чье сообщение цитируем
-        target_user = update.message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_username = target_user.username or f"id{target_user_id}"
-        
-        print(f"🔍 Режим реплай: ID {target_user_id}")
-        
-    elif context.args and len(context.args) > 0:
-        # Аргумент после команды (/и @username или /и 123456)
-        arg = context.args[0].strip()
-        
-        print(f"🔍 Аргумент команды: '{arg}'")
-        
-        if arg.isdigit():
-            # Это ID пользователя
-            target_user_id = int(arg)
-            target_username = f"id{target_user_id}"
-            
-            # Проверяем, есть ли пользователь с таким ID в базе
-            user_info = get_user_info(target_user_id)
-            if not user_info:
-                await update.message.reply_text(
-                    f"❌ <b>Пользователь с ID {target_user_id} не найден в базе</b>",
-                    parse_mode='HTML'
-                )
-                print(f"❌ Пользователь с ID {target_user_id} не найден в базе")
-                return  # ВАЖНО: ВОЗВРАЩАЕМСЯ ИЗ ФУНКЦИИ
-            else:
-                print(f"✅ Пользователь с ID {target_user_id} найден")
-        else:
-            # Это username
-            username = arg.lstrip('@')
-            print(f"🔍 Ищем пользователя по username: @{username}")
-            
-            user_info = get_user_by_username(username)
-            
-            if not user_info:
-                # Пользователь не найден в базе
-                await update.message.reply_text(
-                    f"❌ <b>Пользователь @{username} не найден в базе</b>",
-                    parse_mode='HTML'
-                )
-                print(f"❌ Пользователь @{username} не найден в базе")
-                return  # ВАЖНО: ВОЗВРАЩАЕМСЯ ИЗ ФУНКЦИИ
-            
-            print(f"✅ Пользователь @{username} найден в базе")
-            
-            target_user_id = user_info['user_id']
-            target_username = user_info['username'] or f"id{target_user_id}"
-    else:
+    # Разбираем команду вручную
+    # Формат: /и @username или /и 123456
+    parts = message_text.split()
+    
+    if len(parts) < 2:
         # Без аргументов - показываем свой профиль
         target_user_id = user_id
         target_username = update.effective_user.username or f"id{user_id}"
         print(f"🔍 Без аргументов: показываем свой профиль")
+        
+        # Сохраняем пользователя если его нет в базе
+        save_user(target_user_id, target_username)
+        
+        # Показываем профиль
+        user_info = get_user_info(target_user_id)
+        stats = get_reputation_stats(target_user_id)
+        
+        display_username = f"👤@{target_username}" if target_username and not target_username.startswith('id') else f"👤id{target_user_id}"
+        
+        if user_info and user_info.get("registered_at"):
+            try:
+                reg_date = datetime.fromisoformat(user_info["registered_at"])
+                registration_date = reg_date.strftime("%d/%m/%Y")
+            except:
+                registration_date = datetime.now().strftime("%d/%m/%Y")
+        else:
+            registration_date = datetime.now().strftime("%d/%m/%Y")
+        
+        text = f"""{display_username} (ID: {target_user_id})
+
+<blockquote>🏆 {stats['total']} шт. · {stats['positive_percent']:.0f}% положительных · {stats['negative_percent']:.0f}% отрицательных</blockquote><blockquote>🛡 0 шт. · 0 RUB сумма сделок</blockquote>
+
+<b>ВНИМАТЕЛЬНО СМОТРИТЕ ПОЛЕ «О СЕБЕ»</b>
+
+💳 Депозит: отсутствует
+
+🗓️ Зарегистрирован: {registration_date}"""
+        
+        # Кнопки для группы
+        keyboard = [
+            [InlineKeyboardButton("Посмотреть репутацию", url=f"https://t.me/{context.bot.username}?start=view_{target_user_id}")],
+            [InlineKeyboardButton("🏆 Купить префикс", url="https://t.me/prade146")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+        return
     
-    # Если мы дошли сюда, значит пользователь найден или показываем свой профиль
+    # Есть аргументы после команды
+    arg = parts[1].strip()  # Первый аргумент после /и
+    
+    print(f"🔍 Аргумент команды: '{arg}'")
+    
+    if arg.isdigit():
+        # Это ID пользователя
+        target_user_id = int(arg)
+        target_username = f"id{target_user_id}"
+        
+        # Проверяем, есть ли пользователь с таким ID в базе
+        user_info = get_user_info(target_user_id)
+        if not user_info:
+            await update.message.reply_text(
+                f"❌ <b>Пользователь с ID {target_user_id} не найден в базе</b>",
+                parse_mode='HTML'
+            )
+            print(f"❌ Пользователь с ID {target_user_id} не найден в базе")
+            return  # ВАЖНО: ВОЗВРАЩАЕМСЯ ИЗ ФУНКЦИИ
+        else:
+            print(f"✅ Пользователь с ID {target_user_id} найден")
+    else:
+        # Это username
+        username = arg.lstrip('@')
+        print(f"🔍 Ищем пользователя по username: @{username}")
+        
+        user_info = get_user_by_username(username)
+        
+        if not user_info:
+            # Пользователь не найден в базе
+            await update.message.reply_text(
+                f"❌ <b>Пользователь @{username} не найден в базе</b>",
+                parse_mode='HTML'
+            )
+            print(f"❌ Пользователь @{username} не найден в базе")
+            return  # ВАЖНО: ВОЗВРАЩАЕМСЯ ИЗ ФУНКЦИИ
+        
+        print(f"✅ Пользователь @{username} найден в базе (ID: {user_info['user_id']})")
+        
+        target_user_id = user_info['user_id']
+        target_username = user_info['username'] or f"id{target_user_id}"
+    
+    # Если мы дошли сюда, значит пользователь найден
+    print(f"🎯 Показываем профиль пользователя: ID {target_user_id}, username: {target_username}")
+    
     # Сохраняем пользователя если его нет в базе
     save_user(target_user_id, target_username)
     
-    # Показываем профиль
+    # Получаем информацию о пользователе из базы
     user_info = get_user_info(target_user_id)
+    
+    if not user_info:
+        # Если пользователь все еще не найден (маловероятно, но на всякий случай)
+        await update.message.reply_text(
+            f"❌ <b>Ошибка: не удалось загрузить информацию о пользователе</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Получаем статистику репутации
     stats = get_reputation_stats(target_user_id)
     
     display_username = f"👤@{target_username}" if target_username and not target_username.startswith('id') else f"👤id{target_user_id}"
@@ -2588,6 +2638,7 @@ def main():
     # Команды для личных сообщений
     app.add_handler(CommandHandler("start", start))
     
+    # Команды для чатов (групп)
     # Команды для чатов (групп)
     app.add_handler(CommandHandler("i", quick_profile))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^/и\b'), handle_fake_i_command))
