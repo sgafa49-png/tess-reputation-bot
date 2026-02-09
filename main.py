@@ -931,6 +931,8 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
     
     user_id = update.effective_user.id
     
+    print(f"🔍 Команда /и с аргументами: {context.args}")
+    
     # Определяем целевого пользователя
     if update.message.reply_to_message:
         # Реплай на сообщение - показываем профиль того, чье сообщение цитируем
@@ -938,9 +940,13 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
         target_user_id = target_user.id
         target_username = target_user.username or f"id{target_user_id}"
         
+        print(f"🔍 Режим реплай: ID {target_user_id}")
+        
     elif context.args and len(context.args) > 0:
         # Аргумент после команды (/и @username или /и 123456)
         arg = context.args[0].strip()
+        
+        print(f"🔍 Аргумент команды: '{arg}'")
         
         if arg.isdigit():
             # Это ID пользователя
@@ -951,22 +957,30 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
             user_info = get_user_info(target_user_id)
             if not user_info:
                 await update.message.reply_text(
-                    f"❌ Пользователь с ID {target_user_id} не найден в базе",
+                    f"❌ <b>Пользователь с ID {target_user_id} не найден в базе</b>",
                     parse_mode='HTML'
                 )
-                return
+                print(f"❌ Пользователь с ID {target_user_id} не найден в базе")
+                return  # ВАЖНО: ВОЗВРАЩАЕМСЯ ИЗ ФУНКЦИИ
+            else:
+                print(f"✅ Пользователь с ID {target_user_id} найден")
         else:
             # Это username
             username = arg.lstrip('@')
+            print(f"🔍 Ищем пользователя по username: @{username}")
+            
             user_info = get_user_by_username(username)
             
             if not user_info:
-                # ВАЖНО: Не показываем свой профиль! Сообщаем об ошибке
+                # Пользователь не найден в базе
                 await update.message.reply_text(
-                    f"❌ Пользователь @{username} не найден в базе",
+                    f"❌ <b>Пользователь @{username} не найден в базе</b>",
                     parse_mode='HTML'
                 )
-                return  # ПРЕКРАЩАЕМ ВЫПОЛНЕНИЕ ФУНКЦИИ
+                print(f"❌ Пользователь @{username} не найден в базе")
+                return  # ВАЖНО: ВОЗВРАЩАЕМСЯ ИЗ ФУНКЦИИ
+            
+            print(f"✅ Пользователь @{username} найден в базе")
             
             target_user_id = user_info['user_id']
             target_username = user_info['username'] or f"id{target_user_id}"
@@ -974,8 +988,10 @@ async def handle_fake_i_command(update: Update, context: CallbackContext):
         # Без аргументов - показываем свой профиль
         target_user_id = user_id
         target_username = update.effective_user.username or f"id{user_id}"
+        print(f"🔍 Без аргументов: показываем свой профиль")
     
-    # Сохраняем пользователя если его нет в базе (только для своего профиля или реплая)
+    # Если мы дошли сюда, значит пользователь найден или показываем свой профиль
+    # Сохраняем пользователя если его нет в базе
     save_user(target_user_id, target_username)
     
     # Показываем профиль
@@ -2575,6 +2591,7 @@ def main():
     # Команды для чатов (групп)
     app.add_handler(CommandHandler("i", quick_profile))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^/и\b'), handle_fake_i_command))
+    
     # Обработчики кнопок
     app.add_handler(CallbackQueryHandler(button_handler))
     
